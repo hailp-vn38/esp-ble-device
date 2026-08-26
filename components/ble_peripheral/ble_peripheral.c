@@ -23,6 +23,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -96,6 +97,7 @@ static struct {
     bool gatt_registered;
 
     EventGroupHandle_t ready_event;
+    SemaphoreHandle_t notify_submit_mutex;
     bool adv_active;
 } s_periph;
 
@@ -218,12 +220,16 @@ static void notify_worker(void *arg)
             continue;
         if (s_periph.conn_handle == BLE_HS_CONN_HANDLE_NONE) continue;
 
-        struct os_mbuf *om = os_mbuf_get_pkthdr(NULL, 0);
+        struct os_mbuf *om = os_msys_get_pkthdr(0, 0);
         if (om == NULL) continue;
-        os_mbuf_append(om, msg.data, msg.len);
-        int rc = ble_gattc_notify_custom(s_periph.conn_handle,
-                                         s_periph.status_val_handle, om);
-        os_mbuf_free_chain(om);
+        int rc = os_mbuf_append(om, msg.data, msg.len);
+        if (rc != 0) {
+            os_mbuf_free_chain(om);
+            continue;
+        }
+        /* ble_gatts_notify_custom consumes om regardless of outcome. */
+        rc = ble_gatts_notify_custom(s_periph.conn_handle,
+                                     s_periph.status_val_handle, om);
         if (rc != 0 && rc != BLE_HS_ENOTCONN) {
             ESP_LOGW(TAG, "notify failed: %d", rc);
         }
@@ -338,6 +344,8 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
     switch (event->type) {
 
     case BLE_GAP_EVENT_CONNECT: {
+        /* Connect completion ends the advertising procedure. */
+        s_periph.adv_active = false;
         if (event->connect.status != 0) {
             ESP_LOGW(TAG, "connect failed: %d", event->connect.status);
             set_state(BLE_PERIPH_ADVERTISING);
@@ -361,6 +369,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         s_periph.mtu = 0;
         s_periph.security_ok = false;
         s_periph.cccd_enabled = false;
+        s_periph.adv_active = false;
         xEventGroupClearBits(s_periph.ready_event, READY_BIT_ALL);
         set_state(BLE_PERIPH_ADVERTISING);
         start_advertising();
@@ -401,6 +410,9 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
             } else {
                 s_periph.cccd_enabled = false;
                 xEventGroupClearBits(s_periph.ready_event, READY_BIT_CCCD);
+                if (s_periph.security_ok) {
+                    set_state(BLE_PERIPH_WAIT_CCCD);
+                }
             }
         }
         return 0;
@@ -452,6 +464,9 @@ int ble_peripheral_init(const ble_peripheral_config_t *config,
 
     s_periph.ready_event = xEventGroupCreate();
     if (s_periph.ready_event == NULL) return -1;
+
+    s_periph.notify_submit_mutex = xSemaphoreCreateMutex();
+    if (s_periph.notify_submit_mutex == NULL) return -1;
 
     set_state(BLE_PERIPH_INITIALIZED);
     ESP_LOGI(TAG, "initialized (name=%s, bond=%d)",
@@ -522,20 +537,55 @@ int ble_peripheral_stop(void)
 
 int ble_peripheral_notify(const uint8_t *data, size_t len)
 {
-    if (s_periph.state < BLE_PERIPH_READY) return -1;
-    if (data == NULL || len == 0 || len > GW_MSG_MAX_LEN) return -1;
+    ble_peripheral_notify_item_t item = {.data = data, .len = len};
+    return ble_peripheral_notify_batch(&item, 1);
+}
 
-    uint16_t max_payload = gw_ble_max_tx_payload(s_periph.mtu);
-    if (len > max_payload) return -1;
-
-    notify_msg_t msg = { .len = (uint16_t)len };
-    memcpy(msg.data, data, len);
-
-    if (xQueueSend(s_periph.notify_queue, &msg, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "notify queue full, dropping %zu bytes", len);
+int ble_peripheral_notify_batch(const ble_peripheral_notify_item_t *items,
+                                size_t count)
+{
+    if (items == NULL || count == 0 || count > BLE_NOTIFY_QUEUE_DEPTH ||
+        s_periph.notify_submit_mutex == NULL ||
+        xSemaphoreTake(s_periph.notify_submit_mutex,
+                       pdMS_TO_TICKS(1000)) != pdTRUE) {
         return -1;
     }
-    return 0;
+
+    int result = -1;
+    if (s_periph.state != BLE_PERIPH_READY || !s_periph.cccd_enabled) goto done;
+
+    uint16_t max_payload = gw_ble_max_tx_payload(s_periph.mtu);
+    for (size_t i = 0; i < count; i++) {
+        if (items[i].data == NULL || items[i].len == 0 ||
+            items[i].len > max_payload || items[i].len > GW_MSG_MAX_LEN) {
+            goto done;
+        }
+    }
+
+    /* Wait for enough room before the first enqueue, so a batch is never
+     * partially submitted. The worker can continue draining while producers
+     * are serialized by notify_submit_mutex. */
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(1000);
+    while (uxQueueSpacesAvailable(s_periph.notify_queue) < count) {
+        if (s_periph.state != BLE_PERIPH_READY ||
+            (int32_t)(deadline - xTaskGetTickCount()) <= 0) {
+            goto done;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        notify_msg_t msg = {.len = (uint16_t)items[i].len};
+        memcpy(msg.data, items[i].data, items[i].len);
+        if (xQueueSend(s_periph.notify_queue, &msg, 0) != pdTRUE) goto done;
+    }
+    result = 0;
+
+done:
+    xSemaphoreGive(s_periph.notify_submit_mutex);
+    if (result != 0) ESP_LOGW(TAG, "notify batch rejected (count=%u)",
+                              (unsigned)count);
+    return result;
 }
 
 bool ble_peripheral_is_connected(void)

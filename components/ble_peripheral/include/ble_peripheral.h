@@ -109,6 +109,16 @@ int ble_peripheral_stop(void);
  */
 int ble_peripheral_notify(const uint8_t *data, size_t len);
 
+typedef struct {
+    const uint8_t *data;
+    size_t len;
+} ble_peripheral_notify_item_t;
+
+/* Enqueue a contiguous notification transaction. Other producers cannot
+ * interleave messages in the batch. The largest supported batch is 16. */
+int ble_peripheral_notify_batch(const ble_peripheral_notify_item_t *items,
+                                size_t count);
+
 /* ------------------------------------------------------------------ *
  * Status queries
  * ------------------------------------------------------------------ */

@@ -1,5 +1,5 @@
 /*
- * gateway_protocol — ESP-GATT Protocol v2 wire contract (Device side).
+ * gateway_protocol — ESP-GATT Protocol v3 wire contract (Device side).
  *
  * Single source of truth for protocol constants and CBOR message codec
  * shared with esp-ble-gateway. DO NOT fork per product. When the shared
@@ -21,7 +21,7 @@ extern "C" {
  * Protocol constants (must match Gateway cbor_codec / ble_central)
  * ------------------------------------------------------------------ */
 
-#define GW_PROTOCOL_VERSION 2u
+#define GW_PROTOCOL_VERSION 3u
 
 /* BLE contract: Peripheral exposes these; Gateway discovers them. */
 #define GW_BLE_SERVICE_UUID 0xABF0u /* Primary service              */
@@ -36,6 +36,8 @@ extern "C" {
 #define GW_MSG_COMMAND_LEN        32u
 #define GW_MSG_NAME_LEN           32u
 #define GW_MSG_DEVICE_TYPE_LEN    16u
+#define GW_MSG_CAP_LABEL_LEN      32u
+#define GW_MSG_CAP_UNIT_LEN       12u
 
 /* Known wire message types. Device RX handles only device_command;
  * Device TX emits device_ack / device_event. */
@@ -43,6 +45,10 @@ extern "C" {
 #define GW_MSG_TYPE_DEVICE_COMMAND  "device_command"
 #define GW_MSG_TYPE_DEVICE_ACK      "device_ack"
 #define GW_MSG_TYPE_DEVICE_EVENT    "device_event"
+#define GW_MSG_TYPE_CAPABILITIES_BEGIN "capabilities_begin"
+#define GW_MSG_TYPE_CAPABILITY_ITEM    "capability_item"
+#define GW_MSG_TYPE_CAPABILITIES_END   "capabilities_end"
+#define GW_COMMAND_DESCRIBE_CAPABILITIES "describe_capabilities"
 
 /* CBOR numeric keys (wire contract, do not renumber). */
 enum {
@@ -57,6 +63,17 @@ enum {
     GW_KEY_BLE_ADDR = 8,
     GW_KEY_BLE_ADDR_TYPE = 9,
     GW_KEY_REQUEST_ID = 10,
+    GW_KEY_SNAPSHOT_ID = 11,
+    GW_KEY_SEQUENCE = 12,
+    GW_KEY_TOTAL = 13,
+    GW_KEY_VALUE_TYPE = 14,
+    GW_KEY_CAPABILITY_FLAGS = 15,
+    GW_KEY_MIN_VALUE = 16,
+    GW_KEY_MAX_VALUE = 17,
+    GW_KEY_STEP = 18,
+    GW_KEY_CAPABILITY_LABEL = 19,
+    GW_KEY_CAPABILITY_UNIT = 20,
+    GW_KEY_CAPABILITY_REVISION = 21,
 };
 
 /* ------------------------------------------------------------------ *
@@ -88,15 +105,37 @@ typedef struct {
     int has_request_id;
     int int_value;
     int bool_value;
+    int has_int_value;
+    int has_bool_value;
     int has_device_id;
     char name[GW_MSG_NAME_LEN];
     char device_type[GW_MSG_DEVICE_TYPE_LEN];
     uint8_t ble_addr[6];
     uint8_t ble_addr_type;
     int has_ble_addr;
+    uint32_t snapshot_id;
+    int has_snapshot_id;
+    uint16_t sequence;
+    int has_sequence;
+    uint16_t total;
+    int has_total;
+    uint8_t value_type;
+    int has_value_type;
+    uint8_t capability_flags;
+    int has_capability_flags;
+    int32_t min_value;
+    int has_min_value;
+    int32_t max_value;
+    int has_max_value;
+    uint32_t step;
+    int has_step;
+    char capability_label[GW_MSG_CAP_LABEL_LEN];
+    char capability_unit[GW_MSG_CAP_UNIT_LEN];
+    uint32_t capability_revision;
+    int has_capability_revision;
 } gw_message_t;
 
-/* Zero-init a message; TX then defaults to emitting protocol v2. */
+/* Zero-init a message; TX then defaults to emitting protocol v3. */
 void gw_message_init(gw_message_t *msg);
 
 /* Max ATT payload for notify/write given negotiated MTU:
@@ -110,14 +149,14 @@ uint16_t gw_ble_max_tx_payload(uint16_t negotiated_mtu);
 /* Encode msg as CBOR map into out_buf.
  * Always emits: protocol_version, type, command, int_value, bool_value.
  * Emits optionally: device_id, request_id, name, device_type,
- * ble_addr(+ble_addr_type).
+ * ble_addr(+ble_addr_type), and protocol-v3 capability metadata.
  * Returns encoded length (>0) or negative gw_result_t. */
 int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf,
                       size_t out_cap);
 
 /* Decode CBOR map into out_msg. Strict against current Gateway decoder:
- * requires type, command, int_value, bool_value; version in 1..2
- * (absent -> defaults to 2); request_id if present in 1..UINT32_MAX;
+ * requires type, command, int_value, bool_value; version in 1..3
+ * (absent -> defaults to 3); request_id if present in 1..UINT32_MAX;
  * total length <= GW_MSG_MAX_LEN; no trailing bytes.
  * Returns GW_OK or negative gw_result_t. */
 int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg);

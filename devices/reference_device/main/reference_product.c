@@ -42,8 +42,11 @@ static TimerHandle_t s_heartbeat_timer;
 static device_cmd_result_t cmd_set_led_handler(
     const gw_message_t *request, device_cmd_response_t *response)
 {
-    /* int_value: 0 = off, 1 = on */
-    bool new_state = (request->int_value != 0);
+    /* Keep accepting the legacy v2 integer form during the short window
+     * before the gateway has committed the v3 capability snapshot. */
+    bool new_state = request->protocol_version >= 3
+                         ? request->bool_value != 0
+                         : request->int_value != 0;
     gpio_set_level(REF_LED_GPIO, new_state ? 1 : 0);
     s_led_state = new_state;
     ESP_LOGI(TAG, "LED -> %s", new_state ? "ON" : "OFF");
@@ -162,8 +165,26 @@ static int ref_product_stop(void)
 
 static int ref_register_commands(void)
 {
-    device_command_register("set_led", cmd_set_led_handler);
-    device_command_register("get_state", cmd_get_state_handler);
+    const device_cmd_capability_t set_led = {
+        .command = "set_led",
+        .label = "LED power",
+        .unit = "",
+        .value_type = DEVICE_CMD_VALUE_BOOL,
+        .flags = DEVICE_CMD_FLAG_IDEMPOTENT,
+    };
+    const device_cmd_capability_t get_state = {
+        .command = "get_state",
+        .label = "LED state",
+        .unit = "",
+        .value_type = DEVICE_CMD_VALUE_NONE,
+        .flags = DEVICE_CMD_FLAG_IDEMPOTENT,
+    };
+    if (device_command_register_capability(&set_led,
+                                           cmd_set_led_handler) != 0 ||
+        device_command_register_capability(&get_state,
+                                           cmd_get_state_handler) != 0) {
+        return -1;
+    }
     ESP_LOGI(TAG, "commands registered: set_led, get_state");
     return 0;
 }
@@ -185,6 +206,7 @@ static const device_app_profile_t s_profile = {
     .firmware_version = "0.1.0",
     .ble_name_prefix = "GW-REF",
     .protocol_version = GW_PROTOCOL_VERSION,
+    .capability_revision = 1,
     .supports_factory_reset = true,
     .supports_telemetry = true,
     .supports_local_button = true,

@@ -65,6 +65,7 @@ typedef struct {
     const char *firmware_version;
     const char *ble_name_prefix;
     uint8_t protocol_version;
+    uint32_t capability_revision;
     bool supports_factory_reset;
     bool supports_telemetry;
     bool supports_local_button;

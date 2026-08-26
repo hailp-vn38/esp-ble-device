@@ -1,15 +1,15 @@
 /*
- * gateway_protocol — CBOR codec for ESP-GATT Protocol v2 (Device side).
+ * gateway_protocol — CBOR codec for ESP-GATT Protocol v3 (Device side).
  *
  * Wire format: definite-length CBOR map with numeric keys, mirroring the
  * Gateway encoder (QCBOR) and decoder semantics:
  *  - required RX fields: type(1), command(3), int_value(4), bool_value(5)
- *  - protocol_version(0) optional on wire; absent -> v2; accepted 1..2
+ *  - protocol_version(0) optional on wire; absent -> v3; accepted 1..3
  *  - request_id(10) optional; if present must be 1..UINT32_MAX
  *  - unknown keys tolerated (skipped); no trailing bytes allowed
  *
- * Encoder always emits explicit protocol_version (v2 unless explicitly
- * overridden to 1) per integration contract: new firmware MUST NOT rely
+ * Encoder always emits explicit protocol_version (v3 unless explicitly
+ * overridden) per integration contract: new firmware MUST NOT rely
  * on decoder-side version fallback.
  */
 #include "gateway_protocol.h"
@@ -161,11 +161,15 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
         !gw_string_fits(msg->type, sizeof(msg->type)) ||
         msg->type[0] == '\0' ||
         !gw_string_fits(msg->command, sizeof(msg->command)) ||
-        msg->command[0] == '\0') {
+        msg->command[0] == '\0' ||
+        !gw_string_fits(msg->capability_label,
+                        sizeof(msg->capability_label)) ||
+        !gw_string_fits(msg->capability_unit,
+                        sizeof(msg->capability_unit))) {
         return GW_ERR_INVALID_ARG;
     }
 
-    /* Contract: firmware emits v2 explicitly. Values above the current
+    /* Contract: firmware emits v3 explicitly. Values above the current
      * protocol are rejected before touching the output buffer. */
     uint64_t version = msg->protocol_version;
     if (version == 0u) version = GW_PROTOCOL_VERSION;
@@ -177,6 +181,9 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
 
     if (msg->has_request_id && msg->request_id == 0u) {
         return GW_ERR_VALIDATION; /* request_id 0 is not wire-valid */
+    }
+    if (msg->has_snapshot_id && msg->snapshot_id == 0u) {
+        return GW_ERR_VALIDATION;
     }
     if (msg->has_device_id &&
         (!gw_string_fits(msg->device_id, sizeof(msg->device_id)) ||
@@ -194,6 +201,17 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
     if (msg->name[0] != '\0') pair_count++;
     if (msg->device_type[0] != '\0') pair_count++;
     if (msg->has_ble_addr) pair_count += 2;
+    if (msg->has_snapshot_id) pair_count++;
+    if (msg->has_sequence) pair_count++;
+    if (msg->has_total) pair_count++;
+    if (msg->has_value_type) pair_count++;
+    if (msg->has_capability_flags) pair_count++;
+    if (msg->has_min_value) pair_count++;
+    if (msg->has_max_value) pair_count++;
+    if (msg->has_step) pair_count++;
+    if (msg->capability_label[0] != '\0') pair_count++;
+    if (msg->capability_unit[0] != '\0') pair_count++;
+    if (msg->has_capability_revision) pair_count++;
 
     gw_writer_t w = { out_buf, out_cap, 0u };
     int rc = gw_put_head(&w, 5u, pair_count);
@@ -241,6 +259,51 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
         }
         if (rc == GW_OK) rc = gw_put_uint(&w, GW_KEY_BLE_ADDR_TYPE);
         if (rc == GW_OK) rc = gw_put_uint(&w, msg->ble_addr_type);
+    }
+
+    if (rc == GW_OK && msg->has_snapshot_id) {
+        rc = gw_put_uint(&w, GW_KEY_SNAPSHOT_ID);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->snapshot_id);
+    }
+    if (rc == GW_OK && msg->has_sequence) {
+        rc = gw_put_uint(&w, GW_KEY_SEQUENCE);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->sequence);
+    }
+    if (rc == GW_OK && msg->has_total) {
+        rc = gw_put_uint(&w, GW_KEY_TOTAL);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->total);
+    }
+    if (rc == GW_OK && msg->has_value_type) {
+        rc = gw_put_uint(&w, GW_KEY_VALUE_TYPE);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->value_type);
+    }
+    if (rc == GW_OK && msg->has_capability_flags) {
+        rc = gw_put_uint(&w, GW_KEY_CAPABILITY_FLAGS);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->capability_flags);
+    }
+    if (rc == GW_OK && msg->has_min_value) {
+        rc = gw_put_uint(&w, GW_KEY_MIN_VALUE);
+        if (rc == GW_OK) rc = gw_put_int(&w, msg->min_value);
+    }
+    if (rc == GW_OK && msg->has_max_value) {
+        rc = gw_put_uint(&w, GW_KEY_MAX_VALUE);
+        if (rc == GW_OK) rc = gw_put_int(&w, msg->max_value);
+    }
+    if (rc == GW_OK && msg->has_step) {
+        rc = gw_put_uint(&w, GW_KEY_STEP);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->step);
+    }
+    if (rc == GW_OK && msg->capability_label[0] != '\0') {
+        rc = gw_put_uint(&w, GW_KEY_CAPABILITY_LABEL);
+        if (rc == GW_OK) rc = gw_put_text(&w, msg->capability_label);
+    }
+    if (rc == GW_OK && msg->capability_unit[0] != '\0') {
+        rc = gw_put_uint(&w, GW_KEY_CAPABILITY_UNIT);
+        if (rc == GW_OK) rc = gw_put_text(&w, msg->capability_unit);
+    }
+    if (rc == GW_OK && msg->has_capability_revision) {
+        rc = gw_put_uint(&w, GW_KEY_CAPABILITY_REVISION);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->capability_revision);
     }
 
 done:
@@ -560,6 +623,107 @@ int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
             has_request_id = true;
             break;
 
+        case GW_KEY_SNAPSHOT_ID: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT32_MAX, &value);
+            if (rc == GW_OK && value == 0u) rc = GW_ERR_DECODE;
+            if (rc == GW_OK) {
+                out_msg->snapshot_id = (uint32_t)value;
+                out_msg->has_snapshot_id = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_SEQUENCE: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT16_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->sequence = (uint16_t)value;
+                out_msg->has_sequence = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_TOTAL: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT16_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->total = (uint16_t)value;
+                out_msg->has_total = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_VALUE_TYPE: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT8_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->value_type = (uint8_t)value;
+                out_msg->has_value_type = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_CAPABILITY_FLAGS: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT8_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->capability_flags = (uint8_t)value;
+                out_msg->has_capability_flags = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_MIN_VALUE: {
+            int value = 0;
+            rc = gw_get_int_value(&r, &value);
+            if (rc == GW_OK) {
+                out_msg->min_value = (int32_t)value;
+                out_msg->has_min_value = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_MAX_VALUE: {
+            int value = 0;
+            rc = gw_get_int_value(&r, &value);
+            if (rc == GW_OK) {
+                out_msg->max_value = (int32_t)value;
+                out_msg->has_max_value = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_STEP: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT32_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->step = (uint32_t)value;
+                out_msg->has_step = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_CAPABILITY_LABEL:
+            rc = gw_get_text(&r, out_msg->capability_label,
+                             sizeof(out_msg->capability_label), true);
+            break;
+
+        case GW_KEY_CAPABILITY_UNIT:
+            rc = gw_get_text(&r, out_msg->capability_unit,
+                             sizeof(out_msg->capability_unit), true);
+            break;
+
+        case GW_KEY_CAPABILITY_REVISION: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT32_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->capability_revision = (uint32_t)value;
+                out_msg->has_capability_revision = 1;
+            }
+            break;
+        }
+
         default:
             rc = gw_skip_item(&r, 0);
             break;
@@ -584,6 +748,8 @@ int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
     out_msg->protocol_version = (uint8_t)version;
     out_msg->int_value = int_value;
     out_msg->bool_value = bool_value ? 1 : 0;
+    out_msg->has_int_value = 1;
+    out_msg->has_bool_value = 1;
     if (has_request_id) {
         out_msg->request_id = (uint32_t)request_id;
         out_msg->has_request_id = 1;
@@ -623,6 +789,12 @@ void gw_build_ack(gw_message_t *ack, const gw_message_t *request,
 
     ack->int_value = int_value;
     ack->bool_value = success ? 1 : 0;
+    ack->has_int_value = 1;
+    ack->has_bool_value = 1;
+    if (request->protocol_version >= 1u &&
+        request->protocol_version <= GW_PROTOCOL_VERSION) {
+        ack->protocol_version = request->protocol_version;
+    }
 }
 
 void gw_build_event(gw_message_t *event, const char *device_id,
@@ -638,6 +810,8 @@ void gw_build_event(gw_message_t *event, const char *device_id,
     }
     event->int_value = int_value;
     event->bool_value = bool_value ? 1 : 0;
+    event->has_int_value = 1;
+    event->has_bool_value = 1;
 }
 
 static bool gw_non_empty(const char *value, size_t capacity)

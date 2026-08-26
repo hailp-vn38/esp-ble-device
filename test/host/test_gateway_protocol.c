@@ -94,6 +94,7 @@ static void test_encode_golden_ack(void)
     uint8_t buf[GW_MSG_MAX_LEN];
 
     gw_message_init(&request);
+    request.protocol_version = 2;
     strcpy(request.type, GW_MSG_TYPE_DEVICE_COMMAND);
     strcpy(request.device_id, "ref_01");
     request.has_device_id = 1;
@@ -258,17 +259,17 @@ static void test_decode_rejections(void)
     CHECK_INT(gw_message_decode(NO_BOOL, sizeof(NO_BOOL), &decoded),
               GW_ERR_DECODE);
 
-    /* Version handling (#50/#51): 0 and >2 rejected, absent defaults v2,
+    /* Version handling: 0 and >3 rejected, absent defaults v3,
      * v1 tolerated at codec level. */
     static const uint8_t VERSION_0[] = { 0xA5, 0x00, 0x00, 0x01, 0x61, 't',
                                          0x03, 0x61, 'c', 0x04, 0x00,
                                          0x05, 0xF4 };
-    static const uint8_t VERSION_3[] = { 0xA5, 0x00, 0x03, 0x01, 0x61, 't',
+    static const uint8_t VERSION_4[] = { 0xA5, 0x00, 0x04, 0x01, 0x61, 't',
                                          0x03, 0x61, 'c', 0x04, 0x00,
                                          0x05, 0xF4 };
     CHECK_INT(gw_message_decode(VERSION_0, sizeof(VERSION_0), &decoded),
               GW_ERR_UNSUPPORTED_VERSION);
-    CHECK_INT(gw_message_decode(VERSION_3, sizeof(VERSION_3), &decoded),
+    CHECK_INT(gw_message_decode(VERSION_4, sizeof(VERSION_4), &decoded),
               GW_ERR_UNSUPPORTED_VERSION);
 
     static const uint8_t VERSION_ABSENT[] = { 0xA4, 0x01, 0x61, 't', 0x03,
@@ -328,7 +329,7 @@ static void test_decode_rejections(void)
     /* Unknown keys are tolerated (mirror Gateway targeted lookups). */
     static const uint8_t UNKNOWN_KEYS[] = {
         0xA7, 0x00, 0x02, 0x01, 0x61, 't',  0x03, 0x61, 'c',
-        0x04, 0x00, 0x05, 0xF4, 0x0B, 0x62, 'z', 'z', 0x18,
+        0x04, 0x00, 0x05, 0xF4, 0x16, 0x62, 'z', 'z', 0x18,
         0x63, 0x80, /* key 99 -> empty array */
     };
     CHECK_INT(gw_message_decode(UNKNOWN_KEYS, sizeof(UNKNOWN_KEYS), &decoded),
@@ -362,6 +363,49 @@ static void test_decode_rejections(void)
     CHECK_INT(gw_message_decode(NULL, 8, &decoded), GW_ERR_INVALID_ARG);
 }
 
+static void test_capability_v3_roundtrip(void)
+{
+    gw_message_t item, decoded;
+    uint8_t buf[GW_MSG_MAX_LEN];
+    gw_message_init(&item);
+    strcpy(item.type, GW_MSG_TYPE_CAPABILITY_ITEM);
+    strcpy(item.device_id, "lamp-01");
+    item.has_device_id = 1;
+    strcpy(item.command, "set_brightness");
+    item.snapshot_id = 88;
+    item.has_snapshot_id = 1;
+    item.sequence = 1;
+    item.has_sequence = 1;
+    item.value_type = 2;
+    item.has_value_type = 1;
+    item.capability_flags = 1;
+    item.has_capability_flags = 1;
+    item.min_value = 0;
+    item.has_min_value = 1;
+    item.max_value = 100;
+    item.has_max_value = 1;
+    item.step = 5;
+    item.has_step = 1;
+    strcpy(item.capability_label, "Brightness");
+    strcpy(item.capability_unit, "%");
+
+    int encoded = gw_message_encode(&item, buf, sizeof(buf));
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK_INT(decoded.protocol_version, 3);
+    CHECK(strcmp(decoded.type, GW_MSG_TYPE_CAPABILITY_ITEM) == 0);
+    CHECK_INT(decoded.snapshot_id, 88);
+    CHECK(decoded.has_snapshot_id);
+    CHECK_INT(decoded.sequence, 1);
+    CHECK_INT(decoded.value_type, 2);
+    CHECK_INT(decoded.capability_flags, 1);
+    CHECK_INT(decoded.min_value, 0);
+    CHECK_INT(decoded.max_value, 100);
+    CHECK_INT(decoded.step, 5);
+    CHECK(strcmp(decoded.capability_label, "Brightness") == 0);
+    CHECK(strcmp(decoded.capability_unit, "%") == 0);
+}
+
 static void test_encode_validation(void)
 {
     gw_message_t msg;
@@ -383,7 +427,7 @@ static void test_encode_validation(void)
     CHECK_INT(gw_message_encode(&msg, buf, sizeof(buf)), GW_ERR_VALIDATION);
 
     /* request_id == 0 with presence flag is not wire-valid (#60). */
-    msg.protocol_version = 0; /* defaults to v2 */
+    msg.protocol_version = 0; /* defaults to current protocol */
     msg.has_request_id = 1;
     msg.request_id = 0;
     CHECK_INT(gw_message_encode(&msg, buf, sizeof(buf)), GW_ERR_VALIDATION);
@@ -445,6 +489,7 @@ int main(void)
     test_decode_rejections();
     test_encode_validation();
     test_string_limits();
+    test_capability_v3_roundtrip();
 
     printf("gateway_protocol: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

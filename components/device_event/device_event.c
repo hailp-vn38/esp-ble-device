@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 #include "gateway_protocol.h"
 
@@ -55,6 +56,7 @@ static struct {
     int telemetry_values[TELEMETRY_SLOTS];
     bool telemetry_pending[TELEMETRY_SLOTS];
     int telemetry_count;
+    SemaphoreHandle_t telemetry_mutex;
 } s_event;
 
 /* ------------------------------------------------------------------ *
@@ -90,6 +92,17 @@ static void event_worker(void *arg)
         if (xQueueReceive(s_event.queue, &slot, portMAX_DELAY) != pdTRUE)
             continue;
 
+        if (slot.event_class == DEVICE_EVENT_TELEMETRY &&
+            s_event.telemetry_mutex != NULL &&
+            xSemaphoreTake(s_event.telemetry_mutex, portMAX_DELAY) == pdTRUE) {
+            int idx = find_telemetry_slot(slot.event_name);
+            if (idx >= 0) {
+                slot.int_value = s_event.telemetry_values[idx];
+                s_event.telemetry_pending[idx] = false;
+            }
+            xSemaphoreGive(s_event.telemetry_mutex);
+        }
+
         /* Build and encode event message. */
         gw_message_t msg;
         gw_build_event(&msg, s_event.device_id, slot.event_name,
@@ -124,6 +137,8 @@ int device_event_init(int (*notify_fn)(const uint8_t *, size_t),
 
     s_event.queue = xQueueCreate(EVENT_QUEUE_DEPTH, sizeof(event_slot_t));
     if (s_event.queue == NULL) return -1;
+    s_event.telemetry_mutex = xSemaphoreCreateMutex();
+    if (s_event.telemetry_mutex == NULL) return -1;
 
     xTaskCreate(event_worker, "event_worker", EVENT_TASK_STACK,
                 NULL, EVENT_TASK_PRIORITY, &s_event.worker_task);
@@ -142,16 +157,22 @@ int device_event_publish(const char *event_name,
     /* Telemetry coalescing (doc §33): replace pending telemetry
      * with same name instead of enqueueing. */
     if (event_class == DEVICE_EVENT_TELEMETRY) {
+        if (xSemaphoreTake(s_event.telemetry_mutex, pdMS_TO_TICKS(100)) !=
+            pdTRUE) {
+            return -1;
+        }
         int idx = find_telemetry_slot(event_name);
         if (idx >= 0 && s_event.telemetry_pending[idx]) {
             s_event.telemetry_values[idx] = int_value;
+            xSemaphoreGive(s_event.telemetry_mutex);
             return 0; /* coalesced */
         }
-        idx = alloc_telemetry_slot(event_name);
+        if (idx < 0) idx = alloc_telemetry_slot(event_name);
         if (idx >= 0) {
             s_event.telemetry_pending[idx] = true;
             s_event.telemetry_values[idx] = int_value;
         }
+        xSemaphoreGive(s_event.telemetry_mutex);
     }
 
     event_slot_t slot = {
@@ -163,6 +184,13 @@ int device_event_publish(const char *event_name,
     strlcpy(slot.event_name, event_name, sizeof(slot.event_name));
 
     if (xQueueSend(s_event.queue, &slot, 0) != pdTRUE) {
+        if (event_class == DEVICE_EVENT_TELEMETRY &&
+            xSemaphoreTake(s_event.telemetry_mutex,
+                           pdMS_TO_TICKS(100)) == pdTRUE) {
+            int idx = find_telemetry_slot(event_name);
+            if (idx >= 0) s_event.telemetry_pending[idx] = false;
+            xSemaphoreGive(s_event.telemetry_mutex);
+        }
         ESP_LOGW(TAG, "event queue full, dropping: %s", event_name);
         return -1;
     }
@@ -183,7 +211,11 @@ int device_event_flush(void)
 {
     if (s_event.queue == NULL) return -1;
     xQueueReset(s_event.queue);
-    memset(s_event.telemetry_pending, 0, sizeof(s_event.telemetry_pending));
+    if (xSemaphoreTake(s_event.telemetry_mutex, portMAX_DELAY) == pdTRUE) {
+        memset(s_event.telemetry_pending, 0,
+               sizeof(s_event.telemetry_pending));
+        xSemaphoreGive(s_event.telemetry_mutex);
+    }
     ESP_LOGI(TAG, "flushed");
     return 0;
 }

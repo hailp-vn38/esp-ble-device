@@ -100,6 +100,64 @@ static int gateway_style_decode(const uint8_t *buf, size_t len,
         return -1;
     }
 
+    uint64_t optional_uint = 0;
+    QCBORDecode_GetUInt64InMapN(&ctx, 11, &optional_uint);
+    err = QCBORDecode_GetAndResetError(&ctx);
+    if (err == QCBOR_SUCCESS) {
+        out->snapshot_id = (uint32_t)optional_uint;
+        out->has_snapshot_id = 1;
+    } else if (err != QCBOR_ERR_LABEL_NOT_FOUND) return -1;
+    QCBORDecode_GetUInt64InMapN(&ctx, 12, &optional_uint);
+    err = QCBORDecode_GetAndResetError(&ctx);
+    if (err == QCBOR_SUCCESS) {
+        out->sequence = (uint16_t)optional_uint;
+        out->has_sequence = 1;
+    } else if (err != QCBOR_ERR_LABEL_NOT_FOUND) return -1;
+    QCBORDecode_GetUInt64InMapN(&ctx, 14, &optional_uint);
+    err = QCBORDecode_GetAndResetError(&ctx);
+    if (err == QCBOR_SUCCESS) {
+        out->value_type = (uint8_t)optional_uint;
+        out->has_value_type = 1;
+    } else if (err != QCBOR_ERR_LABEL_NOT_FOUND) return -1;
+    QCBORDecode_GetUInt64InMapN(&ctx, 15, &optional_uint);
+    err = QCBORDecode_GetAndResetError(&ctx);
+    if (err == QCBOR_SUCCESS) {
+        out->capability_flags = (uint8_t)optional_uint;
+        out->has_capability_flags = 1;
+    } else if (err != QCBOR_ERR_LABEL_NOT_FOUND) return -1;
+    int64_t optional_int = 0;
+    QCBORDecode_GetInt64InMapN(&ctx, 16, &optional_int);
+    err = QCBORDecode_GetAndResetError(&ctx);
+    if (err == QCBOR_SUCCESS) {
+        out->min_value = (int32_t)optional_int;
+        out->has_min_value = 1;
+    } else if (err != QCBOR_ERR_LABEL_NOT_FOUND) return -1;
+    QCBORDecode_GetInt64InMapN(&ctx, 17, &optional_int);
+    err = QCBORDecode_GetAndResetError(&ctx);
+    if (err == QCBOR_SUCCESS) {
+        out->max_value = (int32_t)optional_int;
+        out->has_max_value = 1;
+    } else if (err != QCBOR_ERR_LABEL_NOT_FOUND) return -1;
+    QCBORDecode_GetUInt64InMapN(&ctx, 18, &optional_uint);
+    err = QCBORDecode_GetAndResetError(&ctx);
+    if (err == QCBOR_SUCCESS) {
+        out->step = (uint32_t)optional_uint;
+        out->has_step = 1;
+    } else if (err != QCBOR_ERR_LABEL_NOT_FOUND) return -1;
+    QCBORDecode_GetTextStringInMapN(&ctx, 19, &text);
+    err = QCBORDecode_GetAndResetError(&ctx);
+    if (err == QCBOR_SUCCESS) {
+        if (text.len >= sizeof(out->capability_label)) return -1;
+        memcpy(out->capability_label, text.ptr, text.len);
+        out->capability_label[text.len] = '\0';
+    } else if (err != QCBOR_ERR_LABEL_NOT_FOUND) return -1;
+    QCBORDecode_GetTextStringInMapN(&ctx, 20, &text);
+    err = QCBORDecode_GetAndResetError(&ctx);
+    if (err == QCBOR_SUCCESS) {
+        if (text.len >= sizeof(out->capability_unit)) return -1;
+        memcpy(out->capability_unit, text.ptr, text.len);
+        out->capability_unit[text.len] = '\0';
+    } else if (err != QCBOR_ERR_LABEL_NOT_FOUND) return -1;
     QCBORDecode_ExitMap(&ctx);
     if (QCBORDecode_Finish(&ctx) != QCBOR_SUCCESS) return -1;
 
@@ -143,6 +201,35 @@ static int gateway_style_encode(const gw_message_t *msg, uint8_t *out_buf,
                                                 sizeof(msg->ble_addr)});
         QCBOREncode_AddUInt64ToMapN(&ctx, 9, msg->ble_addr_type);
     }
+    if (msg->has_snapshot_id) {
+        QCBOREncode_AddUInt64ToMapN(&ctx, 11, msg->snapshot_id);
+    }
+    if (msg->has_sequence) {
+        QCBOREncode_AddUInt64ToMapN(&ctx, 12, msg->sequence);
+    }
+    if (msg->has_total) QCBOREncode_AddUInt64ToMapN(&ctx, 13, msg->total);
+    if (msg->has_value_type) {
+        QCBOREncode_AddUInt64ToMapN(&ctx, 14, msg->value_type);
+    }
+    if (msg->has_capability_flags) {
+        QCBOREncode_AddUInt64ToMapN(&ctx, 15, msg->capability_flags);
+    }
+    if (msg->has_min_value) {
+        QCBOREncode_AddInt64ToMapN(&ctx, 16, msg->min_value);
+    }
+    if (msg->has_max_value) {
+        QCBOREncode_AddInt64ToMapN(&ctx, 17, msg->max_value);
+    }
+    if (msg->has_step) QCBOREncode_AddUInt64ToMapN(&ctx, 18, msg->step);
+    if (msg->capability_label[0] != '\0') {
+        QCBOREncode_AddSZStringToMapN(&ctx, 19, msg->capability_label);
+    }
+    if (msg->capability_unit[0] != '\0') {
+        QCBOREncode_AddSZStringToMapN(&ctx, 20, msg->capability_unit);
+    }
+    if (msg->has_capability_revision) {
+        QCBOREncode_AddUInt64ToMapN(&ctx, 21, msg->capability_revision);
+    }
     QCBOREncode_CloseMap(&ctx);
 
     UsefulBufC encoded;
@@ -168,6 +255,22 @@ static void verify_fields(const gw_message_t *expected,
     if (expected->has_device_id) {
         CHECK(strcmp(actual->device_id, expected->device_id) == 0);
     }
+    CHECK(actual->has_snapshot_id == expected->has_snapshot_id);
+    if (expected->has_snapshot_id) {
+        CHECK(actual->snapshot_id == expected->snapshot_id);
+    }
+    CHECK(actual->has_sequence == expected->has_sequence);
+    if (expected->has_sequence) CHECK(actual->sequence == expected->sequence);
+    CHECK(actual->has_value_type == expected->has_value_type);
+    if (expected->has_value_type) CHECK(actual->value_type == expected->value_type);
+    CHECK(actual->has_min_value == expected->has_min_value);
+    if (expected->has_min_value) CHECK(actual->min_value == expected->min_value);
+    CHECK(actual->has_max_value == expected->has_max_value);
+    if (expected->has_max_value) CHECK(actual->max_value == expected->max_value);
+    CHECK(actual->has_step == expected->has_step);
+    if (expected->has_step) CHECK(actual->step == expected->step);
+    CHECK(strcmp(actual->capability_label, expected->capability_label) == 0);
+    CHECK(strcmp(actual->capability_unit, expected->capability_unit) == 0);
 }
 
 static void roundtrip(const gw_message_t *msg)
@@ -243,6 +346,31 @@ int main(void)
     full.ble_addr_type = 0;
     full.has_ble_addr = 1;
     roundtrip(&full);
+
+    /* Protocol-v3 capability item in both wire directions. */
+    gw_message_t capability;
+    gw_message_init(&capability);
+    strcpy(capability.type, GW_MSG_TYPE_CAPABILITY_ITEM);
+    strcpy(capability.device_id, "lamp-01");
+    capability.has_device_id = 1;
+    strcpy(capability.command, "set_brightness");
+    capability.snapshot_id = 88;
+    capability.has_snapshot_id = 1;
+    capability.sequence = 1;
+    capability.has_sequence = 1;
+    capability.value_type = 2;
+    capability.has_value_type = 1;
+    capability.capability_flags = 1;
+    capability.has_capability_flags = 1;
+    capability.min_value = 0;
+    capability.has_min_value = 1;
+    capability.max_value = 100;
+    capability.has_max_value = 1;
+    capability.step = 5;
+    capability.has_step = 1;
+    strcpy(capability.capability_label, "Brightness");
+    strcpy(capability.capability_unit, "%");
+    roundtrip(&capability);
 
     printf("interop: %s (%d failures)\n",
            g_failures == 0 ? "PASS" : "FAIL", g_failures);

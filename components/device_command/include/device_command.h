@@ -55,12 +55,41 @@ typedef device_cmd_result_t (*device_cmd_handler_t)(
     const gw_message_t *request,
     device_cmd_response_t *response);
 
+#define DEVICE_COMMAND_MAX_CAPABILITIES 12
+
+typedef enum {
+    DEVICE_CMD_VALUE_NONE = 0,
+    DEVICE_CMD_VALUE_BOOL = 1,
+    DEVICE_CMD_VALUE_INT = 2,
+} device_cmd_value_type_t;
+
+enum {
+    DEVICE_CMD_FLAG_IDEMPOTENT = 1u << 0,
+    DEVICE_CMD_FLAG_DESTRUCTIVE = 1u << 1,
+};
+
+typedef struct {
+    const char *command;
+    const char *label;
+    const char *unit;
+    device_cmd_value_type_t value_type;
+    uint8_t flags;
+    int32_t min_value;
+    int32_t max_value;
+    uint32_t step;
+} device_cmd_capability_t;
+
 /* ------------------------------------------------------------------ *
  * Public API
  * ------------------------------------------------------------------ */
 
 int device_command_init(int (*notify_fn)(const uint8_t *, size_t));
 int device_command_register(const char *command, device_cmd_handler_t handler);
+/* Register or override a handler and expose its argument contract to gateway
+ * capability discovery. Metadata is copied during the call. */
+int device_command_register_capability(
+    const device_cmd_capability_t *capability,
+    device_cmd_handler_t handler);
 int device_command_freeze(void);
 int device_command_submit(const uint8_t *data, size_t len);
 int device_command_complete(const gw_message_t *request,
@@ -68,6 +97,7 @@ int device_command_complete(const gw_message_t *request,
 
 /* Set the logical device_id used in ACK echo. */
 void device_command_set_device_id(const char *id);
+void device_command_set_capability_revision(uint32_t revision);
 
 #ifdef __cplusplus
 }

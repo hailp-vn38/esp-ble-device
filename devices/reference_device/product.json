@@ -14,7 +14,8 @@
   },
   "hardware_version": "1.0",
   "firmware_version": "0.1.0",
-  "protocol_version": 2,
+  "protocol_version": 3,
+  "capability_revision": 1,
   "pins": {
     "led": 8,
     "button": 9

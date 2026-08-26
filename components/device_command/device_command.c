@@ -22,6 +22,8 @@
  */
 #include "device_command.h"
 
+#include <ctype.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -30,6 +32,7 @@
 #include "freertos/queue.h"
 
 #include "gateway_protocol.h"
+#include "ble_peripheral.h"
 
 static const char *TAG = "device_command";
 
@@ -58,6 +61,14 @@ typedef struct {
 typedef struct {
     char command[GW_MSG_COMMAND_LEN];
     device_cmd_handler_t handler;
+    bool advertised;
+    device_cmd_value_type_t value_type;
+    uint8_t flags;
+    int32_t min_value;
+    int32_t max_value;
+    uint32_t step;
+    char label[GW_MSG_CAP_LABEL_LEN];
+    char unit[GW_MSG_CAP_UNIT_LEN];
 } cmd_entry_t;
 
 /* ------------------------------------------------------------------ *
@@ -76,6 +87,8 @@ static struct {
 
     char device_id[GW_MSG_DEVICE_ID_LEN];
     bool has_device_id;
+    uint32_t capability_revision;
+    uint32_t next_snapshot_id;
 } s_cmd;
 
 /* ------------------------------------------------------------------ *
@@ -101,6 +114,157 @@ static device_cmd_handler_t find_handler(const char *command)
         }
     }
     return NULL;
+}
+
+static cmd_entry_t *find_entry(const char *command)
+{
+    for (int i = 0; i < s_cmd.registry_count; i++) {
+        if (strcmp(s_cmd.registry[i].command, command) == 0) {
+            return &s_cmd.registry[i];
+        }
+    }
+    return NULL;
+}
+
+static bool valid_command_name(const char *command)
+{
+    if (command == NULL) return false;
+    size_t length = strnlen(command, GW_MSG_COMMAND_LEN);
+    if (length == 0 || length >= GW_MSG_COMMAND_LEN) return false;
+    for (size_t i = 0; i < length; i++) {
+        unsigned char c = (unsigned char)command[i];
+        if (!isalnum(c) && c != '_' && c != '-' && c != '.') return false;
+    }
+    return true;
+}
+
+static int advertised_count(void)
+{
+    int count = 0;
+    for (int i = 0; i < s_cmd.registry_count; i++) {
+        if (s_cmd.registry[i].advertised) count++;
+    }
+    return count;
+}
+
+static void init_capability_message(gw_message_t *message,
+                                    const gw_message_t *request,
+                                    const char *type, uint32_t snapshot_id)
+{
+    gw_message_init(message);
+    strlcpy(message->type, type, sizeof(message->type));
+    strlcpy(message->device_id, request->device_id,
+            sizeof(message->device_id));
+    message->has_device_id = 1;
+    strlcpy(message->command, GW_COMMAND_DESCRIBE_CAPABILITIES,
+            sizeof(message->command));
+    message->snapshot_id = snapshot_id;
+    message->has_snapshot_id = 1;
+}
+
+static int encode_batch_message(ble_peripheral_notify_item_t *item,
+                                uint8_t storage[GW_MSG_MAX_LEN],
+                                const gw_message_t *message)
+{
+    int encoded = gw_message_encode(message, storage, GW_MSG_MAX_LEN);
+    if (encoded <= 0) return encoded;
+    item->data = storage;
+    item->len = (size_t)encoded;
+    return GW_OK;
+}
+
+/* Emits begin -> item[0..N-1] -> end -> ACK as one transport batch. */
+static int send_capabilities(const gw_message_t *request)
+{
+    if (request->protocol_version < 3u || !request->has_device_id ||
+        !request->has_request_id) {
+        return -1;
+    }
+
+    int total = advertised_count();
+    if (total > DEVICE_COMMAND_MAX_CAPABILITIES) return -1;
+    size_t batch_count = (size_t)total + 3u;
+    ble_peripheral_notify_item_t *items =
+        calloc(batch_count, sizeof(*items));
+    uint8_t (*storage)[GW_MSG_MAX_LEN] =
+        calloc(batch_count, sizeof(*storage));
+    if (items == NULL || storage == NULL) {
+        free(items);
+        free(storage);
+        return -1;
+    }
+
+    uint32_t snapshot_id = ++s_cmd.next_snapshot_id;
+    if (snapshot_id == 0u) snapshot_id = ++s_cmd.next_snapshot_id;
+    size_t out = 0;
+    gw_message_t message;
+    init_capability_message(&message, request,
+                            GW_MSG_TYPE_CAPABILITIES_BEGIN, snapshot_id);
+    message.total = (uint16_t)total;
+    message.has_total = 1;
+    message.capability_revision = s_cmd.capability_revision;
+    message.has_capability_revision = 1;
+    if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
+        goto fail;
+    }
+    out++;
+
+    uint16_t sequence = 0;
+    for (int i = 0; i < s_cmd.registry_count; i++) {
+        const cmd_entry_t *entry = &s_cmd.registry[i];
+        if (!entry->advertised) continue;
+        init_capability_message(&message, request,
+                                GW_MSG_TYPE_CAPABILITY_ITEM, snapshot_id);
+        strlcpy(message.command, entry->command, sizeof(message.command));
+        message.sequence = sequence++;
+        message.has_sequence = 1;
+        message.value_type = (uint8_t)entry->value_type;
+        message.has_value_type = 1;
+        message.capability_flags = entry->flags;
+        message.has_capability_flags = 1;
+        strlcpy(message.capability_label, entry->label,
+                sizeof(message.capability_label));
+        strlcpy(message.capability_unit, entry->unit,
+                sizeof(message.capability_unit));
+        if (entry->value_type == DEVICE_CMD_VALUE_INT) {
+            message.min_value = entry->min_value;
+            message.has_min_value = 1;
+            message.max_value = entry->max_value;
+            message.has_max_value = 1;
+            message.step = entry->step;
+            message.has_step = 1;
+        }
+        if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
+            goto fail;
+        }
+        out++;
+    }
+
+    init_capability_message(&message, request,
+                            GW_MSG_TYPE_CAPABILITIES_END, snapshot_id);
+    message.total = (uint16_t)total;
+    message.has_total = 1;
+    message.bool_value = 1;
+    if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
+        goto fail;
+    }
+    out++;
+
+    gw_build_ack(&message, request, request->device_id, true, 0);
+    if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
+        goto fail;
+    }
+    out++;
+
+    int rc = ble_peripheral_notify_batch(items, out);
+    free(storage);
+    free(items);
+    return rc;
+
+fail:
+    free(storage);
+    free(items);
+    return -1;
 }
 
 /* ------------------------------------------------------------------ *
@@ -151,6 +315,14 @@ static void cmd_worker(void *arg)
         /* Validate message type — only device_command accepted (doc §5). */
         if (strcmp(msg.type, GW_MSG_TYPE_DEVICE_COMMAND) != 0) {
             ESP_LOGW(TAG, "unexpected type: %s", msg.type);
+            continue;
+        }
+
+        if (strcmp(msg.command, GW_COMMAND_DESCRIBE_CAPABILITIES) == 0) {
+            if (send_capabilities(&msg) != 0) {
+                ESP_LOGW(TAG, "capability response failed");
+                send_ack(&msg, false, 0);
+            }
             continue;
         }
 
@@ -213,6 +385,7 @@ int device_command_init(int (*notify_fn)(const uint8_t *, size_t))
 {
     memset(&s_cmd, 0, sizeof(s_cmd));
     s_cmd.notify_fn = notify_fn;
+    s_cmd.capability_revision = 1;
 
     s_cmd.rx_queue = xQueueCreate(CMD_RX_QUEUE_DEPTH, sizeof(cmd_rx_msg_t));
     if (s_cmd.rx_queue == NULL) return -1;
@@ -237,6 +410,55 @@ int device_command_register(const char *command, device_cmd_handler_t handler)
     strlcpy(entry->command, command, sizeof(entry->command));
     entry->handler = handler;
     s_cmd.registry_count++;
+    return 0;
+}
+
+int device_command_register_capability(
+    const device_cmd_capability_t *capability,
+    device_cmd_handler_t handler)
+{
+    if (capability == NULL || handler == NULL || s_cmd.frozen ||
+        !valid_command_name(capability->command) ||
+        capability->value_type > DEVICE_CMD_VALUE_INT ||
+        (capability->value_type == DEVICE_CMD_VALUE_INT &&
+         (capability->min_value > capability->max_value ||
+          capability->step == 0u)) ||
+        (capability->label != NULL &&
+         strnlen(capability->label, GW_MSG_CAP_LABEL_LEN) >=
+             GW_MSG_CAP_LABEL_LEN) ||
+        (capability->unit != NULL &&
+         strnlen(capability->unit, GW_MSG_CAP_UNIT_LEN) >=
+             GW_MSG_CAP_UNIT_LEN)) {
+        return -1;
+    }
+
+    cmd_entry_t *entry = find_entry(capability->command);
+    if (entry == NULL) {
+        if (s_cmd.registry_count >= CMD_REGISTRY_MAX ||
+            advertised_count() >= DEVICE_COMMAND_MAX_CAPABILITIES) {
+            return -1;
+        }
+        entry = &s_cmd.registry[s_cmd.registry_count++];
+        memset(entry, 0, sizeof(*entry));
+        strlcpy(entry->command, capability->command, sizeof(entry->command));
+    } else if (!entry->advertised &&
+               advertised_count() >= DEVICE_COMMAND_MAX_CAPABILITIES) {
+        return -1;
+    }
+
+    entry->handler = handler;
+    entry->advertised = true;
+    entry->value_type = capability->value_type;
+    entry->flags = capability->flags;
+    entry->min_value = capability->min_value;
+    entry->max_value = capability->max_value;
+    entry->step = capability->step;
+    strlcpy(entry->label,
+            capability->label != NULL ? capability->label
+                                      : capability->command,
+            sizeof(entry->label));
+    strlcpy(entry->unit, capability->unit != NULL ? capability->unit : "",
+            sizeof(entry->unit));
     return 0;
 }
 
@@ -280,4 +502,9 @@ void device_command_set_device_id(const char *id)
     if (id == NULL) return;
     strlcpy(s_cmd.device_id, id, sizeof(s_cmd.device_id));
     s_cmd.has_device_id = true;
+}
+
+void device_command_set_capability_revision(uint32_t revision)
+{
+    s_cmd.capability_revision = revision;
 }

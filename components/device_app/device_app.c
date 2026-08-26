@@ -92,6 +92,8 @@ device_app_result_t device_app_start(void)
     /* Step 8: device_command init. */
     int rc = device_command_init(ble_notify_bridge);
     if (rc != 0) return DEVICE_APP_ERR_COMMAND;
+    device_command_set_capability_revision(
+        p->capability_revision != 0 ? p->capability_revision : 1);
 
     /* Step 9-10: register common + product commands. */
     if (p->register_commands) {
