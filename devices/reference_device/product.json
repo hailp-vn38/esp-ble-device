@@ -1,0 +1,22 @@
+{
+  "name": "reference_device",
+  "model": "esp32s3-ref",
+  "device_type": "light",
+  "target": "esp32s3",
+  "chip": {
+    "name": "ESP32-S3",
+    "cpu": "Dual-Core Xtensa LX7 @ 240MHz",
+    "flash": "4MB",
+    "sram": "512KB",
+    "wifi": "2.4GHz 802.11 b/g/n",
+    "ble": "5.0",
+    "usb": "Type-C"
+  },
+  "hardware_version": "1.0",
+  "firmware_version": "0.1.0",
+  "protocol_version": 2,
+  "pins": {
+    "led": 8,
+    "button": 9
+  }
+}
