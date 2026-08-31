@@ -46,6 +46,7 @@
 
 #include "gateway_protocol.h"
 #include "ble_peripheral.h"
+#include "device_feature.h"
 
 static const char *TAG = "device_command";
 
@@ -194,9 +195,11 @@ static int send_capabilities(const gw_message_t *request)
         return -1;
     }
 
-    int total = advertised_count();
-    if (total > DEVICE_COMMAND_MAX_CAPABILITIES) return -1;
-    size_t batch_count = (size_t)total + 3u;
+    int tool_total = advertised_count();
+    int feature_total = (int)device_feature_count();
+    if (tool_total > DEVICE_COMMAND_MAX_CAPABILITIES ||
+        feature_total > DEVICE_FEATURE_MAX_PER_DEVICE) return -1;
+    size_t batch_count = (size_t)tool_total + (size_t)feature_total + 3u;
     ble_peripheral_notify_item_t *items =
         calloc(batch_count, sizeof(*items));
     uint8_t (*storage)[GW_MSG_MAX_LEN] =
@@ -213,8 +216,10 @@ static int send_capabilities(const gw_message_t *request)
     gw_message_t message;
     init_capability_message(&message, request,
                             GW_MSG_TYPE_CAPABILITIES_BEGIN, snapshot_id);
-    message.total = (uint16_t)total;
+    message.total = (uint16_t)tool_total;
     message.has_total = 1;
+    message.feature_total = (uint16_t)feature_total;
+    message.has_feature_total = 1;
     message.capability_revision = s_cmd.capability_revision;
     message.has_capability_revision = 1;
     if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
@@ -253,10 +258,38 @@ static int send_capabilities(const gw_message_t *request)
         out++;
     }
 
+    for (size_t i = 0; i < device_feature_count(); i++) {
+        const device_feature_descriptor_t *feature = device_feature_get(i);
+        init_capability_message(&message, request,
+                                GW_MSG_TYPE_FEATURE_ITEM, snapshot_id);
+        strlcpy(message.feature_id, feature->feature_id,
+                sizeof(message.feature_id));
+        message.has_feature_id = 1;
+        message.feature_type = (uint8_t)feature->type;
+        message.has_feature_type = 1;
+        message.feature_schema_version = feature->schema_version;
+        message.has_feature_schema_version = 1;
+        message.feature_flags = feature->flags;
+        message.has_feature_flags = 1;
+        message.property_id = feature->property.id;
+        message.has_property_id = 1;
+        strlcpy(message.feature_tool, feature->write_tool,
+                sizeof(message.feature_tool));
+        message.has_feature_tool = 1;
+        message.value_type = feature->property.value_type;
+        message.has_value_type = 1;
+        if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
+            goto fail;
+        }
+        out++;
+    }
+
     init_capability_message(&message, request,
                             GW_MSG_TYPE_CAPABILITIES_END, snapshot_id);
-    message.total = (uint16_t)total;
+    message.total = (uint16_t)tool_total;
     message.has_total = 1;
+    message.feature_total = (uint16_t)feature_total;
+    message.has_feature_total = 1;
     message.bool_value = 1;
     if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
         goto fail;
@@ -284,14 +317,25 @@ fail:
  * ACK send helper
  * ------------------------------------------------------------------ */
 
-static void send_ack(const gw_message_t *request, bool success, int int_value)
+static void send_ack(const gw_message_t *request,
+                     const device_cmd_response_t *response)
 {
     if (s_cmd.notify_fn == NULL) return;
 
     gw_message_t ack;
     /* Spec D2/D3: ACK must always echo request->device_id (Gateway routing
      * identity). Never override with configured native ID (s_cmd.device_id). */
-    gw_build_ack(&ack, request, request->device_id, success, int_value);
+    gw_build_ack(&ack, request, request->device_id, response->success,
+                 response->int_value);
+    if (response->has_feature_value_bool) {
+        strlcpy(ack.feature_id, response->feature_id,
+                sizeof(ack.feature_id));
+        ack.has_feature_id = 1;
+        ack.property_id = response->feature_property_id;
+        ack.has_property_id = 1;
+        ack.feature_value_bool = response->feature_value_bool;
+        ack.has_feature_value_bool = 1;
+    }
 
     uint8_t buf[GW_MSG_MAX_LEN];
     int encoded = gw_message_encode(&ack, buf, sizeof(buf));
@@ -335,8 +379,27 @@ static void cmd_worker(void *arg)
         if (strcmp(msg.command, GW_COMMAND_DESCRIBE_CAPABILITIES) == 0) {
             if (send_capabilities(&msg) != 0) {
                 ESP_LOGW(TAG, "capability response failed");
-                send_ack(&msg, false, 0);
+                device_cmd_response_t response = { .success = false };
+                send_ack(&msg, &response);
             }
+            continue;
+        }
+
+        if (strcmp(msg.command, GW_COMMAND_READ_FEATURE_STATE) == 0) {
+            device_cmd_response_t response = { 0 };
+            bool value = false;
+            int read_rc = device_feature_read_bool(
+                msg.feature_id, msg.property_id, &value);
+            response.success = (read_rc == 0);
+            response.int_value = value ? 1 : 0;
+            if (read_rc == 0) {
+                response.has_feature_value_bool = true;
+                response.feature_value_bool = value;
+                response.feature_property_id = msg.property_id;
+                strlcpy(response.feature_id, msg.feature_id,
+                        sizeof(response.feature_id));
+            }
+            send_ack(&msg, &response);
             continue;
         }
 
@@ -344,7 +407,8 @@ static void cmd_worker(void *arg)
         device_cmd_handler_t handler = find_handler(msg.command);
         if (handler == NULL) {
             ESP_LOGW(TAG, "unknown command: %s", msg.command);
-            send_ack(&msg, false, 0);
+            device_cmd_response_t response = { .success = false };
+            send_ack(&msg, &response);
             continue;
         }
 
@@ -354,12 +418,14 @@ static void cmd_worker(void *arg)
 
         if (result == DEVICE_CMD_OK && response.long_running) {
             ESP_LOGI(TAG, "cmd accepted (long-running): %s", msg.command);
-            send_ack(&msg, true, 0);
+            device_cmd_response_t ack = { .success = true };
+            send_ack(&msg, &ack);
         } else if (result == DEVICE_CMD_OK) {
-            send_ack(&msg, response.success, response.int_value);
+            send_ack(&msg, &response);
         } else {
             ESP_LOGW(TAG, "handler error: %s -> %d", msg.command, (int)result);
-            send_ack(&msg, false, 0);
+            device_cmd_response_t ack = { .success = false };
+            send_ack(&msg, &ack);
         }
     }
 }
@@ -524,7 +590,7 @@ int device_command_complete(const gw_message_t *request,
                             const device_cmd_response_t *response)
 {
     if (request == NULL || response == NULL) return -1;
-    send_ack(request, response->success, response->int_value);
+    send_ack(request, response);
     return 0;
 }
 

@@ -1,5 +1,5 @@
 /*
- * gateway_protocol — ESP-GATT Protocol v3 wire contract (Device side).
+ * gateway_protocol — ESP-GATT Protocol v3/v4 wire contract (Device side).
  *
  * Single source of truth for protocol constants and CBOR message codec
  * shared with esp-ble-gateway. DO NOT fork per product. When the shared
@@ -21,7 +21,7 @@ extern "C" {
  * Protocol constants (must match Gateway cbor_codec / ble_central)
  * ------------------------------------------------------------------ */
 
-#define GW_PROTOCOL_VERSION 3u
+#define GW_PROTOCOL_VERSION 4u
 
 /* BLE contract: Peripheral exposes these; Gateway discovers them. */
 #define GW_BLE_SERVICE_UUID 0xABF0u /* Primary service              */
@@ -38,6 +38,7 @@ extern "C" {
 #define GW_MSG_DEVICE_TYPE_LEN    16u
 #define GW_MSG_CAP_LABEL_LEN      32u
 #define GW_MSG_CAP_UNIT_LEN       12u
+#define GW_FEATURE_ID_LEN          32u
 
 /* Known wire message types. Device RX handles only device_command;
  * Device TX emits device_ack / device_event. */
@@ -48,7 +49,10 @@ extern "C" {
 #define GW_MSG_TYPE_CAPABILITIES_BEGIN "capabilities_begin"
 #define GW_MSG_TYPE_CAPABILITY_ITEM    "capability_item"
 #define GW_MSG_TYPE_CAPABILITIES_END   "capabilities_end"
+#define GW_MSG_TYPE_FEATURE_ITEM        "feature_item"
 #define GW_COMMAND_DESCRIBE_CAPABILITIES "describe_capabilities"
+#define GW_COMMAND_READ_FEATURE_STATE    "read_feature_state"
+#define GW_EVENT_FEATURE_STATE           "feature_state"
 
 /* CBOR numeric keys (wire contract, do not renumber). */
 enum {
@@ -74,7 +78,39 @@ enum {
     GW_KEY_CAPABILITY_LABEL = 19,
     GW_KEY_CAPABILITY_UNIT = 20,
     GW_KEY_CAPABILITY_REVISION = 21,
+    GW_KEY_FEATURE_ID = 22,
+    GW_KEY_FEATURE_TYPE = 23,
+    GW_KEY_FEATURE_SCHEMA_VERSION = 24,
+    GW_KEY_FEATURE_FLAGS = 25,
+    GW_KEY_PROPERTY_ID = 26,
+    GW_KEY_FEATURE_VALUE_BOOL = 27,
+    GW_KEY_FEATURE_VALUE_INT = 28,
+    GW_KEY_FEATURE_TOOL = 29,
+    GW_KEY_FEATURE_TOTAL = 30,
 };
+
+typedef enum {
+    GW_FEATURE_NONE = 0,
+    GW_FEATURE_GENERIC_RELAY = 1,
+    GW_FEATURE_ON_OFF_PLUGIN_UNIT = 10,
+    GW_FEATURE_ON_OFF_LIGHT = 11,
+    GW_FEATURE_DIMMABLE_LIGHT = 12,
+    GW_FEATURE_FAN = 20,
+    GW_FEATURE_TEMPERATURE_SENSOR = 30,
+    GW_FEATURE_HUMIDITY_SENSOR = 31,
+    GW_FEATURE_CONTACT_SENSOR = 40,
+} gw_feature_type_t;
+
+typedef enum {
+    GW_PROP_NONE = 0,
+    GW_PROP_ON_OFF = 1,
+    GW_PROP_LEVEL = 2,
+    GW_PROP_PERCENT_SETTING = 3,
+    GW_PROP_PERCENT_CURRENT = 4,
+    GW_PROP_TEMPERATURE = 5,
+    GW_PROP_HUMIDITY = 6,
+    GW_PROP_CONTACT = 7,
+} gw_feature_property_t;
 
 /* ------------------------------------------------------------------ *
  * Result codes
@@ -133,9 +169,27 @@ typedef struct {
     char capability_unit[GW_MSG_CAP_UNIT_LEN];
     uint32_t capability_revision;
     int has_capability_revision;
+    char feature_id[GW_FEATURE_ID_LEN];
+    int has_feature_id;
+    uint8_t feature_type;
+    int has_feature_type;
+    uint16_t feature_schema_version;
+    int has_feature_schema_version;
+    uint16_t feature_flags;
+    int has_feature_flags;
+    uint8_t property_id;
+    int has_property_id;
+    bool feature_value_bool;
+    int has_feature_value_bool;
+    int32_t feature_value_int;
+    int has_feature_value_int;
+    char feature_tool[GW_MSG_COMMAND_LEN];
+    int has_feature_tool;
+    uint16_t feature_total;
+    int has_feature_total;
 } gw_message_t;
 
-/* Zero-init a message; TX then defaults to emitting protocol v3. */
+/* Zero-init a message; TX then defaults to emitting protocol v4. */
 void gw_message_init(gw_message_t *msg);
 
 /* Max ATT payload for notify/write given negotiated MTU:
@@ -149,7 +203,8 @@ uint16_t gw_ble_max_tx_payload(uint16_t negotiated_mtu);
 /* Encode msg as CBOR map into out_buf.
  * Always emits: protocol_version, type, command, int_value, bool_value.
  * Emits optionally: device_id, request_id, name, device_type,
- * ble_addr(+ble_addr_type), and protocol-v3 capability metadata.
+ * ble_addr(+ble_addr_type), protocol-v3 capability metadata and protocol-v4
+ * semantic feature metadata/value fields.
  * Returns encoded length (>0) or negative gw_result_t. */
 int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf,
                       size_t out_cap);
@@ -174,6 +229,9 @@ void gw_build_ack(gw_message_t *ack, const gw_message_t *request,
 /* Build device_event. command carries the event name. */
 void gw_build_event(gw_message_t *event, const char *device_id,
                     const char *event_name, int int_value, bool bool_value);
+void gw_build_feature_event_bool(gw_message_t *event, const char *device_id,
+                                 const char *feature_id, uint8_t property_id,
+                                 bool value);
 
 /* True if msg satisfies mandatory Gateway-side rules for its type
  * (ACK: non-empty device_id/command, request_id >= 1;

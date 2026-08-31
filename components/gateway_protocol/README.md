@@ -1,6 +1,6 @@
 # gateway_protocol
 
-ESP-GATT Protocol v3 wire contract for the Device side. Shared dependency:
+ESP-GATT Protocol v3/v4 wire contract for the Device side. Shared dependency:
 constants, message model and CBOR codec mirroring the Gateway
 (`esp-ble-gateway/components/cbor_codec`, `ble_central` UUID constants).
 
@@ -26,7 +26,7 @@ Xem `include/gateway_protocol.h`.
   optional: `device_id, request_id, name, device_type, ble_addr(+type)` và
   capability metadata (`snapshot_id`, sequence/schema/revision).
 - `gw_message_decode(buf, len, msg)` — strict như decoder Gateway:
-  bắt buộc `type/command/int_value/bool_value`; version 1..3 (thiếu → v3);
+  bắt buộc `type/command/int_value/bool_value`; version 1..4 (thiếu → v4);
   `request_id` nếu có phải ≥ 1; không chấp nhận trailing bytes.
 - `gw_build_ack` / `gw_build_event` — builder encode đúng contract echo.
 - `gw_message_valid_ack` / `gw_message_valid_event` — kiểm tra bắt buộc

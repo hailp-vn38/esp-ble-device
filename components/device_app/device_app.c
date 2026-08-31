@@ -20,6 +20,7 @@
 #include "ble_peripheral.h"
 #include "device_command.h"
 #include "device_event.h"
+#include "device_feature.h"
 
 static const char *TAG = "device_app";
 
@@ -69,6 +70,7 @@ device_app_result_t device_app_start(void)
     if (s_app.started) return DEVICE_APP_ERR_INVALID_STATE;
 
     const device_app_profile_t *p = s_app.profile;
+    int rc = 0;
 
     /* Step 1: Logging already running. */
 
@@ -98,19 +100,29 @@ device_app_result_t device_app_start(void)
              (unsigned)p->protocol_version,
              (unsigned)GW_BLE_SERVICE_UUID);
 
-    /* Step 8: device_command init. */
-    int rc = device_command_init(ble_notify_bridge);
+    /* Step 8: semantic feature registry init. */
+    rc = device_feature_init();
+    if (rc != 0) return DEVICE_APP_ERR_PRODUCT;
+
+    /* Step 9: device_command init. */
+    rc = device_command_init(ble_notify_bridge);
     if (rc != 0) return DEVICE_APP_ERR_COMMAND;
     device_command_set_capability_revision(
         p->capability_revision != 0 ? p->capability_revision : 1);
 
-    /* Step 9-10: register common + product commands. */
+    /* Step 10-11: register common + product commands. */
     if (p->register_commands) {
         rc = p->register_commands();
         if (rc != 0) return DEVICE_APP_ERR_COMMAND;
     }
 
-    /* Step 11: freeze command registry. */
+    /* Register semantic features before command/discovery freeze. */
+    if (p->register_features) {
+        rc = p->register_features();
+        if (rc != 0) return DEVICE_APP_ERR_PRODUCT;
+    }
+
+    /* Freeze command registry and semantic snapshot. */
     device_command_freeze();
 
     /* Step 12: device_event init. */

@@ -1,14 +1,14 @@
 /*
- * gateway_protocol — CBOR codec for ESP-GATT Protocol v3 (Device side).
+ * gateway_protocol — CBOR codec for ESP-GATT Protocol v3/v4 (Device side).
  *
  * Wire format: definite-length CBOR map with numeric keys, mirroring the
  * Gateway encoder (QCBOR) and decoder semantics:
  *  - required RX fields: type(1), command(3), int_value(4), bool_value(5)
- *  - protocol_version(0) optional on wire; absent -> v3; accepted 1..3
+ *  - protocol_version(0) optional on wire; absent -> v4; accepted 1..4
  *  - request_id(10) optional; if present must be 1..UINT32_MAX
  *  - unknown keys tolerated (skipped); no trailing bytes allowed
  *
- * Encoder always emits explicit protocol_version (v3 unless explicitly
+ * Encoder always emits explicit protocol_version (v4 unless explicitly
  * overridden) per integration contract: new firmware MUST NOT rely
  * on decoder-side version fallback.
  */
@@ -165,11 +165,13 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
         !gw_string_fits(msg->capability_label,
                         sizeof(msg->capability_label)) ||
         !gw_string_fits(msg->capability_unit,
-                        sizeof(msg->capability_unit))) {
+                        sizeof(msg->capability_unit)) ||
+        !gw_string_fits(msg->feature_id, sizeof(msg->feature_id)) ||
+        !gw_string_fits(msg->feature_tool, sizeof(msg->feature_tool))) {
         return GW_ERR_INVALID_ARG;
     }
 
-    /* Contract: firmware emits v3 explicitly. Values above the current
+    /* Contract: firmware emits v4 explicitly. Values above the current
      * protocol are rejected before touching the output buffer. */
     uint64_t version = msg->protocol_version;
     if (version == 0u) version = GW_PROTOCOL_VERSION;
@@ -212,6 +214,15 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
     if (msg->capability_label[0] != '\0') pair_count++;
     if (msg->capability_unit[0] != '\0') pair_count++;
     if (msg->has_capability_revision) pair_count++;
+    if (msg->has_feature_id) pair_count++;
+    if (msg->has_feature_type) pair_count++;
+    if (msg->has_feature_schema_version) pair_count++;
+    if (msg->has_feature_flags) pair_count++;
+    if (msg->has_property_id) pair_count++;
+    if (msg->has_feature_value_bool) pair_count++;
+    if (msg->has_feature_value_int) pair_count++;
+    if (msg->has_feature_tool) pair_count++;
+    if (msg->has_feature_total) pair_count++;
 
     gw_writer_t w = { out_buf, out_cap, 0u };
     int rc = gw_put_head(&w, 5u, pair_count);
@@ -304,6 +315,43 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
     if (rc == GW_OK && msg->has_capability_revision) {
         rc = gw_put_uint(&w, GW_KEY_CAPABILITY_REVISION);
         if (rc == GW_OK) rc = gw_put_uint(&w, msg->capability_revision);
+    }
+    if (rc == GW_OK && msg->has_feature_id) {
+        rc = gw_put_uint(&w, GW_KEY_FEATURE_ID);
+        if (rc == GW_OK) rc = gw_put_text(&w, msg->feature_id);
+    }
+    if (rc == GW_OK && msg->has_feature_type) {
+        rc = gw_put_uint(&w, GW_KEY_FEATURE_TYPE);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->feature_type);
+    }
+    if (rc == GW_OK && msg->has_feature_schema_version) {
+        rc = gw_put_uint(&w, GW_KEY_FEATURE_SCHEMA_VERSION);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->feature_schema_version);
+    }
+    if (rc == GW_OK && msg->has_feature_flags) {
+        rc = gw_put_uint(&w, GW_KEY_FEATURE_FLAGS);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->feature_flags);
+    }
+    if (rc == GW_OK && msg->has_property_id) {
+        rc = gw_put_uint(&w, GW_KEY_PROPERTY_ID);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->property_id);
+    }
+    if (rc == GW_OK && msg->has_feature_value_bool) {
+        rc = gw_put_uint(&w, GW_KEY_FEATURE_VALUE_BOOL);
+        if (rc == GW_OK) rc = gw_put_head(&w, 7u,
+                                           msg->feature_value_bool ? 21u : 20u);
+    }
+    if (rc == GW_OK && msg->has_feature_value_int) {
+        rc = gw_put_uint(&w, GW_KEY_FEATURE_VALUE_INT);
+        if (rc == GW_OK) rc = gw_put_int(&w, msg->feature_value_int);
+    }
+    if (rc == GW_OK && msg->has_feature_tool) {
+        rc = gw_put_uint(&w, GW_KEY_FEATURE_TOOL);
+        if (rc == GW_OK) rc = gw_put_text(&w, msg->feature_tool);
+    }
+    if (rc == GW_OK && msg->has_feature_total) {
+        rc = gw_put_uint(&w, GW_KEY_FEATURE_TOTAL);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->feature_total);
     }
 
 done:
@@ -724,6 +772,88 @@ int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
             break;
         }
 
+        case GW_KEY_FEATURE_ID:
+            rc = gw_get_text(&r, out_msg->feature_id,
+                             sizeof(out_msg->feature_id), false);
+            if (rc == GW_OK) out_msg->has_feature_id = 1;
+            break;
+
+        case GW_KEY_FEATURE_TYPE: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT8_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->feature_type = (uint8_t)value;
+                out_msg->has_feature_type = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_FEATURE_SCHEMA_VERSION: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT16_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->feature_schema_version = (uint16_t)value;
+                out_msg->has_feature_schema_version = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_FEATURE_FLAGS: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT16_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->feature_flags = (uint16_t)value;
+                out_msg->has_feature_flags = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_PROPERTY_ID: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT8_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->property_id = (uint8_t)value;
+                out_msg->has_property_id = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_FEATURE_VALUE_BOOL: {
+            bool value = false;
+            rc = gw_get_bool(&r, &value);
+            if (rc == GW_OK) {
+                out_msg->feature_value_bool = value;
+                out_msg->has_feature_value_bool = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_FEATURE_VALUE_INT: {
+            int value = 0;
+            rc = gw_get_int_value(&r, &value);
+            if (rc == GW_OK) {
+                out_msg->feature_value_int = (int32_t)value;
+                out_msg->has_feature_value_int = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_FEATURE_TOOL:
+            rc = gw_get_text(&r, out_msg->feature_tool,
+                             sizeof(out_msg->feature_tool), false);
+            if (rc == GW_OK) out_msg->has_feature_tool = 1;
+            break;
+
+        case GW_KEY_FEATURE_TOTAL: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT16_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->feature_total = (uint16_t)value;
+                out_msg->has_feature_total = 1;
+            }
+            break;
+        }
+
         default:
             rc = gw_skip_item(&r, 0);
             break;
@@ -812,6 +942,20 @@ void gw_build_event(gw_message_t *event, const char *device_id,
     event->bool_value = bool_value ? 1 : 0;
     event->has_int_value = 1;
     event->has_bool_value = 1;
+}
+
+void gw_build_feature_event_bool(gw_message_t *event, const char *device_id,
+                                 const char *feature_id, uint8_t property_id,
+                                 bool value)
+{
+    gw_build_event(event, device_id, GW_EVENT_FEATURE_STATE, 0, false);
+    if (feature_id == NULL || feature_id[0] == '\0') return;
+    gw_copy_str(event->feature_id, sizeof(event->feature_id), feature_id);
+    event->has_feature_id = 1;
+    event->property_id = property_id;
+    event->has_property_id = 1;
+    event->feature_value_bool = value;
+    event->has_feature_value_bool = 1;
 }
 
 static bool gw_non_empty(const char *value, size_t capacity)

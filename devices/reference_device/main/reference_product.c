@@ -3,7 +3,7 @@
  *
  * Hardware: 1 LED (GPIO8) + 1 button (GPIO9, active-low with pull-up).
  * Commands: set_led, get_state.
- * Events: button_pressed, state_changed.
+ * Events: button_pressed, feature_state.
  *
  * Capability registration (spec D6, D7, D8):
  *   - set_led: BOOL, IDEMPOTENT, PUBLIC
@@ -30,6 +30,7 @@
 #include "device_app.h"
 #include "device_command.h"
 #include "device_event.h"
+#include "device_feature.h"
 
 static const char *TAG = "ref_product";
 
@@ -47,6 +48,31 @@ static const char *TAG = "ref_product";
 static bool s_led_state = false;
 static TimerHandle_t s_heartbeat_timer;
 
+static int ref_led_apply(bool new_state, bool publish)
+{
+    esp_err_t err = gpio_set_level(REF_LED_GPIO, new_state ? 1 : 0);
+    if (err != ESP_OK) return -1;
+
+    bool changed = s_led_state != new_state;
+    s_led_state = new_state;
+    if (publish && changed) {
+        int rc = device_feature_publish_bool("led_main", GW_PROP_ON_OFF,
+                                             s_led_state);
+        if (rc != 0) {
+            ESP_LOGW(TAG, "LED state publish failed: %d", rc);
+        }
+    }
+    return 0;
+}
+
+static int ref_led_read_state(void *context, bool *out_value)
+{
+    (void)context;
+    if (out_value == NULL) return -1;
+    *out_value = s_led_state;
+    return 0;
+}
+
 /* ------------------------------------------------------------------ *
  * Command handlers
  * ------------------------------------------------------------------ */
@@ -59,15 +85,15 @@ static device_cmd_result_t cmd_set_led_handler(
     bool new_state = request->protocol_version >= 3
                          ? request->bool_value != 0
                          : request->int_value != 0;
-    gpio_set_level(REF_LED_GPIO, new_state ? 1 : 0);
-    s_led_state = new_state;
+    if (ref_led_apply(new_state, true) != 0) {
+        response->success = false;
+        response->int_value = s_led_state ? 1 : 0;
+        return DEVICE_CMD_ERR_HANDLER;
+    }
     ESP_LOGI(TAG, "LED -> %s", new_state ? "ON" : "OFF");
 
     response->success = true;
     response->int_value = new_state ? 1 : 0;
-
-    /* Publish state_changed event. */
-    device_event_publish_state("led_state", new_state ? 1 : 0);
 
     return DEVICE_CMD_OK;
 }
@@ -209,8 +235,19 @@ static int ref_register_commands(void)
 
 static int ref_register_events(void)
 {
-    ESP_LOGI(TAG, "events registered: button_pressed, state_changed, heartbeat");
+    ESP_LOGI(TAG, "events registered: button_pressed, feature_state, heartbeat");
     return 0;
+}
+
+static int ref_register_features(void)
+{
+    const device_feature_on_off_light_config_t config = {
+        .feature_id = "led_main",
+        .set_command = "set_led",
+        .read_on_off = ref_led_read_state,
+        .context = NULL,
+    };
+    return device_feature_register_on_off_light(&config);
 }
 
 /* ------------------------------------------------------------------ *
@@ -229,10 +266,10 @@ static const device_app_profile_t s_profile = {
     .model = "esp32s3-ref",
     .device_type = "light",
     .hardware_version = "1.0",
-    .firmware_version = "0.1.0",
+    .firmware_version = "0.2.0",
     .ble_name_prefix = "GW-REF",
     .protocol_version = GW_PROTOCOL_VERSION,
-    .capability_revision = 1,  /* Spec D7: bump when public metadata changes */
+    .capability_revision = 2,  /* v4 semantic LED feature added */
     .supports_factory_reset = true,
     .supports_telemetry = true,
     .supports_local_button = true,
@@ -240,6 +277,7 @@ static const device_app_profile_t s_profile = {
     .product_start = ref_product_start,
     .product_stop = ref_product_stop,
     .register_commands = ref_register_commands,
+    .register_features = ref_register_features,
     .register_events = ref_register_events,
 };
 

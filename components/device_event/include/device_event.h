@@ -68,6 +68,10 @@ int device_event_publish(const char *event_name,
  */
 int device_event_publish_state(const char *event_name, int value);
 
+/* Publish a protocol-v4 structured boolean feature state event. */
+int device_event_publish_feature_bool(const char *feature_id,
+                                      uint8_t property_id, bool value);
+
 /*
  * Convenience: publish a telemetry event.
  * Coalesces: if telemetry with same name is already pending,

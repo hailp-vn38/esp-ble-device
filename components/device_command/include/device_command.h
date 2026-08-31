@@ -62,6 +62,10 @@ typedef struct {
     bool success;
     int int_value;
     bool long_running;
+    bool has_feature_value_bool;
+    bool feature_value_bool;
+    uint8_t feature_property_id;
+    char feature_id[GW_FEATURE_ID_LEN];
 } device_cmd_response_t;
 
 typedef device_cmd_result_t (*device_cmd_handler_t)(

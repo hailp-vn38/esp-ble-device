@@ -5,5 +5,6 @@ idf_component_register(
              gateway_protocol
              device_command
              device_event
+             device_feature
     PRIV_REQUIRES esp_driver_gpio
 )

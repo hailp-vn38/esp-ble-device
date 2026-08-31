@@ -2,8 +2,8 @@
  * reference_product — Golden Peripheral product logic (docs §53..#57).
  *
  * Hardware: 1 LED (GPIO8) + 1 button (GPIO9).
- * Commands: set_led, get_state.
- * Events: button_pressed, state_changed.
+ * Commands: set_led, get_state. Semantic feature: led_main.
+ * Events: button_pressed, feature_state.
  */
 #ifndef REFERENCE_PRODUCT_H
 #define REFERENCE_PRODUCT_H

@@ -4,5 +4,6 @@ idf_component_register(
     REQUIRES gateway_protocol
                ble_peripheral
                device_command
-               device_event
+             device_event
+             device_feature
 )

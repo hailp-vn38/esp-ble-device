@@ -6,53 +6,150 @@
 **Matter semantic target:** `GW_FEATURE_ON_OFF_LIGHT`  
 **Gateway protocol target:** v4  
 **Related execution phase:** Phase 10 — Light  
-**Document version:** v1.1  
-**Status:** Reviewed implementation specification  
+**Document version:** v1.2  
+**Status:** DEVICE-SIDE IMPLEMENTED — gateway/hardware/Matter E2E gates pending  
 **Date:** 2026-08-31
 
 ---
 
 # 1. Review summary
 
-Bản v1.1 giữ mục tiêu của v1.0 nhưng sửa các điểm có thể làm implementation lệch kiến trúc.
+Bản v1.2 giữ toàn bộ hướng semantic của v1.1 và cập nhật theo repo `esp-ble-device` mới nhất đã review.
 
-## 1.1 Các thay đổi chính so với v1.0
+## 1.1 Repo baseline đã kiểm tra
 
-1. **Phase 10 không tạo lại generic feature framework.**  
-   `device_feature`, `register_features()` và protocol-v4 feature serialization phải được hoàn thành ở Phase 06/07. Phase 10 chỉ **consume** framework để migrate reference LED.
+Baseline review:
 
-2. **Không dùng generic `get_state` làm semantic read binding.**  
-   Một physical device có thể có nhiều feature; một command `get_state` không xác định được đang đọc LED, fan hay sensor nào.  
-   Protocol v4 phải cung cấp reserved query:
+```text
+hailp-vn38/esp-ble-device
+commit 4fc38661585921aaa7e3c76f167155d78f5376c6
+```
+
+Repo hiện có các cải tiến quan trọng:
+
+```text
+ACK/capability routing identity = request->device_id
+spontaneous device_event identity = native profile.model
+capability order deterministic
+capability_revision rules rõ ràng
+host protocol/capability/identity/interop tests
+BLE diagnostics tốt hơn
+```
+
+Tuy nhiên repo hiện vẫn:
+
+```text
+GW_PROTOCOL_VERSION = 3
+không có components/device_feature
+không có register_features()
+không có structured feature_state
+không có read_feature_state
+```
+
+Do đó:
+
+```text
+Phase 10 LED Matter template
+MUST NOT start
+until Phase 06 + Phase 07 are merged.
+```
+
+## 1.2 Các thay đổi chính so với v1.1
+
+1. **Matter physical-device identity trên gateway không được lấy từ `msg.device_id` của spontaneous event.**
+
+   Repo mới xác định:
+
+   ```text
+   ACK/capability:
+       request->device_id = gateway routing identity
+
+   spontaneous device_event:
+       msg.device_id = native profile.model
+   ```
+
+   Nhiều board cùng model có thể cùng:
+
+   ```text
+   msg.device_id = esp32s3-ref
+   ```
+
+   Vì vậy gateway phải key state bằng **BLE/device-store context**:
+
+   ```text
+   gateway_device_id + feature_id + property
+   ```
+
+   không phải:
+
+   ```text
+   msg.device_id + feature_id + property
+   ```
+
+2. **Dependency ownership được chốt để tránh circular dependency.**
+
+   Target:
+
+   ```text
+   device_feature
+       depends on gateway_protocol
+       may use device_event publish API
+
+   device_command
+       depends on device_feature
+       owns capability/feature discovery transaction
+       owns reserved read_feature_state command handler
+   ```
+
+   Không cho:
+
+   ```text
+   device_feature -> device_command -> device_feature
+   ```
+
+3. **Feature discovery tiếp tục dùng một transaction duy nhất.**
+
+   Current `device_command::send_capabilities()` đang sở hữu:
+
+   ```text
+   begin -> items -> end -> ACK
+   ```
+
+   Protocol v4 phải mở rộng transaction này để chứa:
+
+   ```text
+   tools[]
+   features[]
+   ```
+
+   Phase 10 không được tạo discovery flow riêng cho LED.
+
+4. **Test identity collision trở thành release gate.**
+
+   Hai physical devices:
+
+   ```text
+   native model = esp32s3-ref
+   feature = led_main
+   ```
+
+   nhưng gateway IDs khác nhau phải tạo hai independent state keys/endpoints.
+
+5. **`get_state` vẫn không phải semantic read binding.**
+
+   Matter state seed tiếp tục dùng:
 
    ```text
    read_feature_state(feature_id, property)
    ```
 
-   `get_state` vẫn giữ để backward compatibility.
+6. **Structured event vẫn dùng reserved `command=feature_state`.**
 
-3. **Structured `device_event` vẫn phải có `command` discriminator.**  
-   Protocol v3 codec hiện bắt buộc `command` không rỗng. Protocol v4 thêm `feature_id` và `property`, nhưng nên giữ một reserved command ổn định:
-
-   ```text
-   command = feature_state
-   ```
-
-   Semantic source of truth là:
+   Semantic source of truth:
 
    ```text
-   feature_id + property
+   feature_id + property_id
    ```
-
-   không phải string `command`.
-
-4. **Template config giữ `read_state` callback**, nhưng callback này phục vụ framework-level `read_feature_state`, không bind trực tiếp với legacy `get_state`.
-
-5. **Validation được chia trách nhiệm.**  
-   Device framework validate cấu trúc/local registration. Gateway là authoritative validator của mapping giữa advertised tools và feature semantic contract.
-
-6. **On/Off Light chỉ phù hợp nếu LED là user-facing controllable light.**  
-   Với `reference_device`, LED GPIO8 được coi là demo light actuator. Production status LED không được tự động expose như Matter Light.
 
 ---
 
@@ -283,6 +380,96 @@ Do not recreate framework locally in `reference_device`.
 
 ---
 
+# 6.1 Required component dependency direction
+
+Phase 06/07 implementation must use a dependency direction that cannot create a cycle.
+
+Recommended:
+
+```text
+gateway_protocol
+      |
+      +--------------------+
+      |                    |
+device_event         device_feature
+                           |
+                           v
+                    feature registry
+                           ^
+                           |
+                    device_command
+```
+
+Rules:
+
+```text
+device_feature:
+    depends on gateway_protocol
+    may publish through device_event
+    does NOT depend on device_command
+
+device_command:
+    may depend on device_feature
+    owns reserved read_feature_state dispatch
+    owns unified discovery transaction
+```
+
+Forbidden:
+
+```text
+device_feature -> device_command -> device_feature
+```
+
+If Phase 07 chooses a callback/interface abstraction instead of a direct component dependency, the same ownership rule still applies: feature registry must not need command-registry ownership to exist.
+
+---
+
+# 6.2 Unified discovery ownership
+
+Current protocol v3 discovery is owned by:
+
+```text
+device_command::send_capabilities()
+```
+
+Protocol v4 must extend this same logical transaction.
+
+Target:
+
+```text
+describe_capabilities
+    |
+    +-- capabilities_begin
+    |
+    +-- tool records
+    |
+    +-- feature records
+    |
+    +-- capabilities_end
+    |
+    +-- ACK
+```
+
+Exact record/message types are owned by Phase 06.
+
+Phase 10 LED code only registers:
+
+```text
+led_main
+```
+
+into the generic feature registry.
+
+It MUST NOT:
+
+```text
+send its own discovery batch
+create a second describe command
+serialize LED-specific CBOR directly
+```
+
+---
+
 # 7. Protocol v4 reserved contracts
 
 Phase 10 consumes the following protocol-v4 contracts.
@@ -449,6 +636,73 @@ Physical Device: esp32s3-ref
 
 Device remains Matter-independent.
 
+
+---
+
+# 9.1 Physical-device routing identity — mandatory rule
+
+`profile.model` is not guaranteed unique across physical devices.
+
+Example:
+
+```text
+Device A:
+    profile.model = esp32s3-ref
+    gateway device ID = dev_A
+
+Device B:
+    profile.model = esp32s3-ref
+    gateway device ID = dev_B
+```
+
+Both spontaneous events may carry:
+
+```text
+msg.device_id = esp32s3-ref
+```
+
+Gateway MUST resolve physical identity from the BLE connection/device-store context passed alongside the notification.
+
+Canonical gateway state key:
+
+```text
+(device_store_device_id, feature_id, property_id)
+```
+
+Example:
+
+```text
+dev_A / led_main / GW_PROP_ON_OFF
+dev_B / led_main / GW_PROP_ON_OFF
+```
+
+Matter endpoint identity:
+
+```text
+F:dev_A:led_main
+F:dev_B:led_main
+```
+
+Forbidden:
+
+```text
+F:esp32s3-ref:led_main
+```
+
+if `esp32s3-ref` is only native model metadata.
+
+Device-side rule:
+
+```text
+do not change spontaneous event native identity semantics in Phase 10
+```
+
+Gateway-side rule:
+
+```text
+do not trust msg.device_id as unique physical routing identity for unsolicited events
+```
+
 ---
 
 # 10. Git workflow
@@ -481,6 +735,24 @@ If working tree is not clean:
 ```text
 STOP
 ```
+
+Before creating/modifying LED implementation, agent must verify:
+
+```text
+GW_PROTOCOL_VERSION == 4
+components/device_feature exists
+device_app_profile has register_features
+read_feature_state exists
+feature_state structured event path exists
+```
+
+If any check fails:
+
+```text
+STATUS = BLOCKED
+NEXT STEP = complete Phase 06/07
+```
+
 
 Recommended commits:
 
@@ -944,6 +1216,14 @@ send_capabilities()
 
 Phase 06/07 must already have integrated feature records into the v4 discovery contract.
 
+Required ownership:
+
+```text
+device_command owns discovery request/transaction
+device_feature owns feature registry/data
+device_command enumerates feature registry during discovery
+```
+
 Phase 10 must **not** create a second competing discovery transaction just for LED.
 
 The reference LED only registers data into the existing feature registry.
@@ -1336,6 +1616,62 @@ A v3 gateway is not required to understand v4 semantic records unless Phase 06 e
 
 ---
 
+
+# 35.1 Mandatory multi-device identity collision test
+
+This test is required because current device events use native `profile.model` metadata.
+
+Setup:
+
+```text
+Device A:
+    native model = esp32s3-ref
+    gateway device ID = dev_A
+    feature_id = led_main
+
+Device B:
+    native model = esp32s3-ref
+    gateway device ID = dev_B
+    feature_id = led_main
+```
+
+Inject/receive:
+
+```text
+A: feature_state led_main ON
+B: feature_state led_main OFF
+```
+
+Both messages may contain:
+
+```text
+msg.device_id = esp32s3-ref
+```
+
+Expected gateway state:
+
+```text
+dev_A / led_main / ON_OFF = true
+dev_B / led_main / ON_OFF = false
+```
+
+Expected Matter mapping:
+
+```text
+F:dev_A:led_main != F:dev_B:led_main
+```
+
+Failure conditions:
+
+```text
+state collision
+one device overwrites the other
+endpoint key built from native model
+event dropped because msg.device_id != gateway routing ID
+```
+
+---
+
 # 36. Hardware tests
 
 ## Boot
@@ -1513,56 +1849,166 @@ Feature registration is boot-time bounded metadata.
 
 ---
 
+
+# 39.1 Current repo compatibility status
+
+At reviewed baseline:
+
+```text
+4fc38661585921aaa7e3c76f167155d78f5376c6
+```
+
+Status:
+
+```text
+LED hardware/state model             READY
+set_led BOOL capability              READY
+legacy get_state                     READY
+capability revision policy           READY
+deterministic capability order       READY
+host protocol tests                  READY
+gateway codec interop test           READY
+routing identity separation          READY
+
+Protocol v4                          IMPLEMENTED
+device_feature                       IMPLEMENTED
+register_features                    IMPLEMENTED
+unified feature discovery            IMPLEMENTED (device side)
+feature_state event                  IMPLEMENTED
+read_feature_state                   IMPLEMENTED
+```
+
+Therefore:
+
+```text
+Architecture compatibility = YES
+Immediate Phase-10 execution = YES (device side)
+```
+
+Required order:
+
+```text
+Phase 06
+    ->
+Phase 07
+    ->
+Phase 10
+```
+
+# 39.2 Implementation tracking — 2026-08-31
+
+Các bước đã được kiểm tra và xác nhận trong repo hiện tại:
+
+```text
+[x] LED hardware/state model exists: GPIO8, active-low button on GPIO9, s_led_state
+[x] set_led BOOL capability exists and preserves v2 integer decoding
+[x] legacy get_state capability exists and returns current LED state
+[x] capability revision metadata is wired through device_app/device_command
+[x] deterministic command capability order is implemented
+[x] ACK/capability routing uses request->device_id
+[x] native profile.model identity is kept as event metadata only
+[x] host protocol tests PASS
+[x] host capability tests PASS
+[x] host identity tests PASS
+[x] host BLE tests PASS
+[x] gateway protocol tests PASS
+[x] gateway codec interop test PASS
+```
+
+Các bước Phase 10 chưa thể đánh dấu hoàn thành vì thiếu prerequisite:
+
+```text
+[x] Protocol v4
+[x] components/device_feature
+[x] device_app_profile.register_features
+[x] unified feature discovery
+[x] structured feature_state event
+[x] read_feature_state
+[x] reference LED semantic registration (led_main)
+```
+
+Kết luận thực thi:
+
+```text
+PHASE 10 STATUS = DEVICE-SIDE IMPLEMENTED
+BLOCKER = gateway adapter, hardware runtime và Matter E2E chưa được xác nhận
+NEXT STEP = chạy flash/hardware test và tích hợp gateway v4
+```
+
+Evidence commands:
+
+```text
+bash test/host/run_device_protocol_tests.sh       PASS
+bash test/host/run_device_capability_tests.sh     PASS
+bash test/host/run_device_identity_tests.sh       PASS
+bash test/host/run_device_ble_tests.sh            PASS
+bash test/host/run_gateway_interop_check.sh       PASS
+bash test/host/run_device_feature_tests.sh        PASS
+idf.py -C devices/reference_device build          PASS (ESP-IDF 6.1-rc1)
+```
+
+Chưa thực hiện trong lượt này: firmware flash, hardware test, gateway Matter E2E và browser/UI validation.
+
+---
+
 # 40. Acceptance gate
 
 Phase PASS only when:
 
 ```text
-[ ] Phase 06/07 prerequisites are present
+[x] Phase 06/07 prerequisites are present
 
-[ ] reference device builds
+[x] unified discovery is owned by device_command and enumerates device_feature registry
+
+[x] no circular dependency device_feature <-> device_command
+
+[x] reference device builds — ESP-IDF 6.1-rc1 build PASS
 
 [ ] set_led backward compatibility passes
 
 [ ] get_state backward compatibility passes
 
-[ ] led_main registered
+[x] led_main registered
 
-[ ] type = GW_FEATURE_ON_OFF_LIGHT
+[x] type = GW_FEATURE_ON_OFF_LIGHT
 
-[ ] schema = 1
+[x] schema = 1
 
-[ ] GW_PROP_ON_OFF = BOOL
+[x] GW_PROP_ON_OFF = BOOL
 
-[ ] write binding = set_led
+[x] write binding = set_led
 
-[ ] framework read provider resolves through read_feature_state
+[x] framework read provider resolves through read_feature_state
 
-[ ] semantic event uses command=feature_state
+[x] semantic event uses command=feature_state
 
-[ ] semantic event carries feature_id + property
+[x] semantic event carries feature_id + property
 
-[ ] no semantic parsing of "led_state"
+[x] no semantic parsing of "led_state"
 
-[ ] no dependency on profile.device_type for Matter
+[x] no dependency on profile.device_type for Matter
 
-[ ] duplicate feature registration rejected
+[x] duplicate feature registration rejected
 
-[ ] reconnect state recovery uses read_feature_state
+[x] reconnect state recovery uses read_feature_state (device command path)
 
-[ ] no ESP-Matter/CHIP dependency on device
+[ ] gateway keys spontaneous feature state using BLE/device-store routing context
 
-[ ] capability revision incremented
+[ ] two same-model devices with led_main do not collide
 
-[ ] unit tests PASS
+[x] no ESP-Matter/CHIP dependency on device — source inspection PASS
 
-[ ] protocol tests PASS
+[x] capability revision incremented — 1 -> 2
+
+[x] unit tests PASS — baseline suites plus feature registry tests
+
+[x] protocol tests PASS — v3 compatibility plus v4 semantic codec checks
 
 [ ] hardware tests PASS
 
 [ ] Matter E2E PASS when gateway adapter is available
 
-[ ] working tree clean
+[ ] working tree clean — this tracking update is an uncommitted documentation change
 
 [ ] final checkpoint commit created
 ```
@@ -1630,6 +2076,18 @@ read_feature_state(led_main, GW_PROP_ON_OFF)
 
 EVENT:
 feature_state
+
+ROUTING IDENTITY:
+gateway BLE/device-store context
+
+NATIVE EVENT IDENTITY:
+profile.model metadata only
+
+DISCOVERY OWNER:
+device_command
+
+FEATURE REGISTRY OWNER:
+device_feature
 
 BUILD:
 ...
@@ -1741,10 +2199,18 @@ device_feature_publish_bool
     ->
 device_event
       command=feature_state
+      native msg.device_id=profile.model
       feature_id=led_main
       property=GW_PROP_ON_OFF
     ->
-gateway
+gateway BLE notification context
+      gateway_device_id=<device-store identity>
+    ->
+device_state[
+      gateway_device_id,
+      led_main,
+      GW_PROP_ON_OFF
+    ]
 ```
 
 The peripheral remains independent of Matter.

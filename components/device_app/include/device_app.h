@@ -88,6 +88,7 @@ typedef struct {
 
     /* Command/event registration */
     int (*register_commands)(void);
+    int (*register_features)(void);
     int (*register_events)(void);
 } device_app_profile_t;
 

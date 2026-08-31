@@ -259,17 +259,17 @@ static void test_decode_rejections(void)
     CHECK_INT(gw_message_decode(NO_BOOL, sizeof(NO_BOOL), &decoded),
               GW_ERR_DECODE);
 
-    /* Version handling: 0 and >3 rejected, absent defaults v3,
+    /* Version handling: 0 and >4 rejected, absent defaults v4,
      * v1 tolerated at codec level. */
     static const uint8_t VERSION_0[] = { 0xA5, 0x00, 0x00, 0x01, 0x61, 't',
                                          0x03, 0x61, 'c', 0x04, 0x00,
                                          0x05, 0xF4 };
-    static const uint8_t VERSION_4[] = { 0xA5, 0x00, 0x04, 0x01, 0x61, 't',
+    static const uint8_t VERSION_5[] = { 0xA5, 0x00, 0x05, 0x01, 0x61, 't',
                                          0x03, 0x61, 'c', 0x04, 0x00,
                                          0x05, 0xF4 };
     CHECK_INT(gw_message_decode(VERSION_0, sizeof(VERSION_0), &decoded),
               GW_ERR_UNSUPPORTED_VERSION);
-    CHECK_INT(gw_message_decode(VERSION_4, sizeof(VERSION_4), &decoded),
+    CHECK_INT(gw_message_decode(VERSION_5, sizeof(VERSION_5), &decoded),
               GW_ERR_UNSUPPORTED_VERSION);
 
     static const uint8_t VERSION_ABSENT[] = { 0xA4, 0x01, 0x61, 't', 0x03,
@@ -392,7 +392,7 @@ static void test_capability_v3_roundtrip(void)
     int encoded = gw_message_encode(&item, buf, sizeof(buf));
     CHECK(encoded > 0);
     CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
-    CHECK_INT(decoded.protocol_version, 3);
+    CHECK_INT(decoded.protocol_version, 4);
     CHECK(strcmp(decoded.type, GW_MSG_TYPE_CAPABILITY_ITEM) == 0);
     CHECK_INT(decoded.snapshot_id, 88);
     CHECK(decoded.has_snapshot_id);
@@ -481,6 +481,46 @@ static void test_string_limits(void)
     CHECK_INT(gw_message_encode(&msg, buf, sizeof(buf)), GW_ERR_VALIDATION);
 }
 
+static void test_feature_v4_roundtrip(void)
+{
+    gw_message_t msg, decoded;
+    uint8_t buf[GW_MSG_MAX_LEN];
+
+    gw_message_init(&msg);
+    strcpy(msg.type, GW_MSG_TYPE_FEATURE_ITEM);
+    strcpy(msg.command, GW_COMMAND_DESCRIBE_CAPABILITIES);
+    strcpy(msg.feature_id, "led_main");
+    msg.has_feature_id = 1;
+    msg.feature_type = GW_FEATURE_ON_OFF_LIGHT;
+    msg.has_feature_type = 1;
+    msg.feature_schema_version = 1;
+    msg.has_feature_schema_version = 1;
+    msg.property_id = GW_PROP_ON_OFF;
+    msg.has_property_id = 1;
+    strcpy(msg.feature_tool, "set_led");
+    msg.has_feature_tool = 1;
+    msg.value_type = 1;
+    msg.has_value_type = 1;
+    int encoded = gw_message_encode(&msg, buf, sizeof(buf));
+    CHECK(encoded > 0);
+    CHECK(gw_message_decode(buf, (size_t)encoded, &decoded) == GW_OK);
+    CHECK(decoded.protocol_version == 4);
+    CHECK(decoded.has_feature_id && strcmp(decoded.feature_id, "led_main") == 0);
+    CHECK(decoded.feature_type == GW_FEATURE_ON_OFF_LIGHT);
+    CHECK(decoded.feature_schema_version == 1);
+    CHECK(decoded.property_id == GW_PROP_ON_OFF);
+    CHECK(decoded.has_feature_tool && strcmp(decoded.feature_tool, "set_led") == 0);
+
+    gw_build_feature_event_bool(&msg, "esp32s3-ref", "led_main",
+                                GW_PROP_ON_OFF, true);
+    encoded = gw_message_encode(&msg, buf, sizeof(buf));
+    CHECK(encoded > 0);
+    CHECK(gw_message_decode(buf, (size_t)encoded, &decoded) == GW_OK);
+    CHECK(strcmp(decoded.command, GW_EVENT_FEATURE_STATE) == 0);
+    CHECK(decoded.has_feature_value_bool && decoded.feature_value_bool);
+    CHECK(decoded.has_feature_id && decoded.has_property_id);
+}
+
 int main(void)
 {
     test_encode_golden_ack();
@@ -490,6 +530,7 @@ int main(void)
     test_encode_validation();
     test_string_limits();
     test_capability_v3_roundtrip();
+    test_feature_v4_roundtrip();
 
     printf("gateway_protocol: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
