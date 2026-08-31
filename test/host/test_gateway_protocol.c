@@ -63,11 +63,11 @@ static void check_bytes(const uint8_t *actual, size_t actual_len,
  * Golden vectors (diagnostic notation in contract doc)
  * ------------------------------------------------------------------ */
 
-/* {0:2, 1:"device_ack", 2:"ref_01", 3:"ping", 10:1, 4:0, 5:true}
+/* {0:4, 1:"device_ack", 2:"ref_01", 3:"ping", 10:1, 4:0, 5:true}
  * Field order mirrors the Gateway QCBOR encoder; map order is not
  * contract but byte-equality eases capture diffing. */
 static const uint8_t GOLDEN_ACK[] = {
-    0xA7, 0x00, 0x02,                                     /* map(7), v=2 */
+    0xA7, 0x00, 0x04,                                     /* map(7), v=4 */
     0x01, 0x6A, 'd', 'e', 'v', 'i', 'c', 'e', '_', 'a', 'c', 'k',
     0x02, 0x66, 'r', 'e', 'f', '_', '0', '1',
     0x03, 0x64, 'p', 'i', 'n', 'g',
@@ -76,9 +76,9 @@ static const uint8_t GOLDEN_ACK[] = {
     0x05, 0xF5,                                           /* true       */
 };
 
-/* {0:2, 1:"device_event", 2:"relay_01", 3:"button_pressed", 4:1, 5:true} */
+/* {0:4, 1:"device_event", 2:"relay_01", 3:"button_pressed", 4:1, 5:true} */
 static const uint8_t GOLDEN_EVENT[] = {
-    0xA6, 0x00, 0x02,                                     /* map(6), v=2 */
+    0xA6, 0x00, 0x04,                                     /* map(6), v=4 */
     0x01, 0x6C, 'd', 'e', 'v', 'i', 'c', 'e', '_', 'e', 'v', 'e', 'n', 't',
     0x02, 0x68, 'r', 'e', 'l', 'a', 'y', '_', '0', '1',
     0x03, 0x6E, 'b', 'u', 't', 't', 'o', 'n', '_', 'p', 'r', 'e', 's', 's', 'e', 'd',
@@ -94,7 +94,7 @@ static void test_encode_golden_ack(void)
     uint8_t buf[GW_MSG_MAX_LEN];
 
     gw_message_init(&request);
-    request.protocol_version = 2;
+    request.protocol_version = GW_PROTOCOL_VERSION;
     strcpy(request.type, GW_MSG_TYPE_DEVICE_COMMAND);
     strcpy(request.device_id, "ref_01");
     request.has_device_id = 1;
@@ -121,7 +121,7 @@ static void test_encode_golden_ack(void)
     CHECK(decoded.bool_value == 1);
     CHECK(decoded.has_request_id == 1);
     CHECK(decoded.request_id == 1);
-    CHECK(decoded.protocol_version == 2);
+    CHECK(decoded.protocol_version == GW_PROTOCOL_VERSION);
 }
 
 static void test_decode_golden_vectors(void)
@@ -129,7 +129,7 @@ static void test_decode_golden_vectors(void)
     /* Contract #185: negative command vector must still decode so the
      * Device can answer with a failure ACK. */
     static const uint8_t NEGATIVE_CMD[] = {
-        0xA7, 0x00, 0x02,
+        0xA7, 0x00, 0x04,
         0x01, 0x6E, 'd', 'e', 'v', 'i', 'c', 'e', '_', 'c', 'o', 'm', 'm', 'a', 'n', 'd',
         0x02, 0x66, 'r', 'e', 'f', '_', '0', '1',
         0x03, 0x6B, 'u', 'n', 'k', 'n', 'o', 'w', 'n', '_', 'x', 'y', 'z',
@@ -220,7 +220,6 @@ static void test_build_and_roundtrip(void)
     msg.has_device_id = 1;
     strcpy(msg.command, "state_changed");
     strcpy(msg.name, "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"); /* 31 chars */
-    strcpy(msg.device_type, "ttttttttttttttt");          /* 15 chars */
     const uint8_t addr[6] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 };
     memcpy(msg.ble_addr, addr, sizeof(addr));
     msg.ble_addr_type = 1;
@@ -230,7 +229,6 @@ static void test_build_and_roundtrip(void)
     CHECK(encoded > 0 && (size_t)encoded <= GW_MSG_MAX_LEN);
     CHECK(gw_message_decode(buf, (size_t)encoded, &decoded) == GW_OK);
     CHECK(strcmp(decoded.name, msg.name) == 0);
-    CHECK(strcmp(decoded.device_type, msg.device_type) == 0);
     CHECK(decoded.has_device_id == 1);
     CHECK(memcmp(decoded.ble_addr, addr, sizeof(addr)) == 0);
     CHECK(decoded.ble_addr_type == 1);
@@ -259,8 +257,7 @@ static void test_decode_rejections(void)
     CHECK_INT(gw_message_decode(NO_BOOL, sizeof(NO_BOOL), &decoded),
               GW_ERR_DECODE);
 
-    /* Version handling: 0 and >4 rejected, absent defaults v4,
-     * v1 tolerated at codec level. */
+    /* Version handling (strict v4): 0, absent, and v1/v2/v3 all reject. */
     static const uint8_t VERSION_0[] = { 0xA5, 0x00, 0x00, 0x01, 0x61, 't',
                                          0x03, 0x61, 'c', 0x04, 0x00,
                                          0x05, 0xF4 };
@@ -277,23 +274,46 @@ static void test_decode_rejections(void)
                                               0x05, 0xF4 };
     CHECK_INT(
         gw_message_decode(VERSION_ABSENT, sizeof(VERSION_ABSENT), &decoded),
-        GW_OK);
-    CHECK(decoded.protocol_version == GW_PROTOCOL_VERSION);
+        GW_ERR_UNSUPPORTED_VERSION);
 
     static const uint8_t VERSION_1[] = { 0xA5, 0x00, 0x01, 0x01, 0x61, 't',
                                          0x03, 0x61, 'c', 0x04, 0x00,
                                          0x05, 0xF4 };
+    static const uint8_t VERSION_2[] = { 0xA5, 0x00, 0x02, 0x01, 0x61, 't',
+                                         0x03, 0x61, 'c', 0x04, 0x00,
+                                         0x05, 0xF4 };
+    static const uint8_t VERSION_3[] = { 0xA5, 0x00, 0x03, 0x01, 0x61, 't',
+                                         0x03, 0x61, 'c', 0x04, 0x00,
+                                         0x05, 0xF4 };
+    static const uint8_t VERSION_4[] = { 0xA5, 0x00, 0x04, 0x01, 0x61, 't',
+                                         0x03, 0x61, 'c', 0x04, 0x00,
+                                         0x05, 0xF4 };
     CHECK_INT(gw_message_decode(VERSION_1, sizeof(VERSION_1), &decoded),
+              GW_ERR_UNSUPPORTED_VERSION);
+    CHECK_INT(gw_message_decode(VERSION_2, sizeof(VERSION_2), &decoded),
+              GW_ERR_UNSUPPORTED_VERSION);
+    CHECK_INT(gw_message_decode(VERSION_3, sizeof(VERSION_3), &decoded),
+              GW_ERR_UNSUPPORTED_VERSION);
+    CHECK_INT(gw_message_decode(VERSION_4, sizeof(VERSION_4), &decoded),
               GW_OK);
-    CHECK(decoded.protocol_version == 1);
+    CHECK(decoded.protocol_version == GW_PROTOCOL_VERSION);
+
+    /* Reserved key 7 (former device_type) is ignored, not rejected. */
+    static const uint8_t RESERVED_KEY_7[] = {
+        0xA6, 0x00, 0x04, 0x01, 0x61, 't',  0x03, 0x61, 'c',
+        0x04, 0x00, 0x05, 0xF4, 0x07, 0x63, 'o', 'l', 'd',
+    };
+    CHECK_INT(gw_message_decode(RESERVED_KEY_7, sizeof(RESERVED_KEY_7),
+                                &decoded),
+              GW_OK);
 
     /* request_id rules (#60): zero rejected, absent allowed. */
-    static const uint8_t REQUEST_ZERO[] = { 0xA7, 0x00, 0x02, 0x01, 0x61,
+    static const uint8_t REQUEST_ZERO[] = { 0xA7, 0x00, 0x04, 0x01, 0x61,
                                             't',  0x03, 0x61, 'c', 0x04,
                                             0x00, 0x05, 0xF4, 0x0A, 0x00 };
     /* request_id = 2^32 via 8-byte argument -> exceeds uint32 range. */
     static const uint8_t REQUEST_TOO_BIG[] = {
-        0xA7, 0x00, 0x02, 0x01, 0x61, 't',    0x03, 0x61, 'c',
+        0xA7, 0x00, 0x04, 0x01, 0x61, 't',    0x03, 0x61, 'c',
         0x04, 0x00, 0x05, 0xF4, 0x0A, 0x1B, 0x00, 0x00, 0x00,
         0x01, 0x00, 0x00, 0x00, 0x00,
     };
@@ -305,7 +325,7 @@ static void test_decode_rejections(void)
 
     /* Structural strictness. */
     static const uint8_t TRAILING_GARBAGE[] = {
-        0xA7, 0x00, 0x02, 0x01, 0x6A, 'd', 'e', 'v', 'i', 'c', 'e', '_',
+        0xA7, 0x00, 0x04, 0x01, 0x6A, 'd', 'e', 'v', 'i', 'c', 'e', '_',
         'a',  'c',  'k',  0x02, 0x66, 'r', 'e', 'f', '_', '0', '1', 0x03,
         0x64, 'p',  'i',  'n',  'g',  0x0A, 0x01, 0x04, 0x00, 0x05, 0xF5,
         0xFF,
@@ -328,7 +348,7 @@ static void test_decode_rejections(void)
 
     /* Unknown keys are tolerated (mirror Gateway targeted lookups). */
     static const uint8_t UNKNOWN_KEYS[] = {
-        0xA7, 0x00, 0x02, 0x01, 0x61, 't',  0x03, 0x61, 'c',
+        0xA7, 0x00, 0x04, 0x01, 0x61, 't',  0x03, 0x61, 'c',
         0x04, 0x00, 0x05, 0xF4, 0x16, 0x62, 'z', 'z', 0x18,
         0x63, 0x80, /* key 99 -> empty array */
     };
@@ -337,7 +357,7 @@ static void test_decode_rejections(void)
 
     /* ble_addr without ble_addr_type is rejected (mirror Gateway). */
     static const uint8_t ADDR_NO_TYPE[] = {
-        0xA6, 0x00, 0x02, 0x01, 0x61,  't',  0x03, 0x61, 'c',
+        0xA6, 0x00, 0x04, 0x01, 0x61,  't',  0x03, 0x61, 'c',
         0x04, 0x00, 0x05, 0xF4, 0x08, 0x46, 0x01, 0x02, 0x03,
         0x04, 0x05, 0x06,
     };
@@ -345,7 +365,7 @@ static void test_decode_rejections(void)
               GW_ERR_DECODE);
 
     static const uint8_t ADDR_WITH_TYPE[] = {
-        0xA7, 0x00, 0x02, 0x01, 0x61,  't',  0x03, 0x61, 'c',
+        0xA7, 0x00, 0x04, 0x01, 0x61,  't',  0x03, 0x61, 'c',
         0x04, 0x00, 0x05, 0xF4, 0x08, 0x46, 0x01, 0x02, 0x03,
         0x04, 0x05, 0x06, 0x09, 0x01,
     };
@@ -363,7 +383,7 @@ static void test_decode_rejections(void)
     CHECK_INT(gw_message_decode(NULL, 8, &decoded), GW_ERR_INVALID_ARG);
 }
 
-static void test_capability_v3_roundtrip(void)
+static void test_capability_roundtrip(void)
 {
     gw_message_t item, decoded;
     uint8_t buf[GW_MSG_MAX_LEN];
@@ -421,13 +441,22 @@ static void test_encode_validation(void)
     strcpy(msg.type, GW_MSG_TYPE_DEVICE_EVENT); /* but empty command */
     CHECK_INT(gw_message_encode(&msg, buf, sizeof(buf)), GW_ERR_INVALID_ARG);
 
-    /* Version > current protocol rejected (#50). */
+    /* Version above the current protocol rejected (#50). */
     msg.command[0] = 'x';
     msg.protocol_version = GW_PROTOCOL_VERSION + 1;
-    CHECK_INT(gw_message_encode(&msg, buf, sizeof(buf)), GW_ERR_VALIDATION);
+    CHECK_INT(gw_message_encode(&msg, buf, sizeof(buf)),
+              GW_ERR_UNSUPPORTED_VERSION);
+
+    /* Encoder is strict: only explicit v4 goes on the wire. */
+    msg.protocol_version = 3;
+    CHECK_INT(gw_message_encode(&msg, buf, sizeof(buf)),
+              GW_ERR_UNSUPPORTED_VERSION);
+    msg.protocol_version = 0;
+    CHECK_INT(gw_message_encode(&msg, buf, sizeof(buf)),
+              GW_ERR_UNSUPPORTED_VERSION);
 
     /* request_id == 0 with presence flag is not wire-valid (#60). */
-    msg.protocol_version = 0; /* defaults to current protocol */
+    msg.protocol_version = GW_PROTOCOL_VERSION;
     msg.has_request_id = 1;
     msg.request_id = 0;
     CHECK_INT(gw_message_encode(&msg, buf, sizeof(buf)), GW_ERR_VALIDATION);
@@ -456,7 +485,6 @@ static void test_string_limits(void)
     strcpy(msg.device_id, "ddddddddddddddddddddddddddddddd"); /* 31 */
     msg.has_device_id = 1;
     strcpy(msg.command, "ccccccccccccccccccccccccccccccc");   /* 31 */
-    strcpy(msg.device_type, "ttttttttttttttt");               /* 15 */
     msg.has_request_id = 1;
     msg.request_id = 4294967295u; /* UINT32_MAX */
 
@@ -465,7 +493,6 @@ static void test_string_limits(void)
     CHECK(gw_message_decode(buf, (size_t)encoded, &decoded) == GW_OK);
     CHECK(strlen(decoded.device_id) == 31);
     CHECK(strlen(decoded.command) == 31);
-    CHECK(strlen(decoded.device_type) == 15);
     CHECK(decoded.request_id == 4294967295u);
 
     /* Over-capacity strings are caught before encoding. */
@@ -477,7 +504,7 @@ static void test_string_limits(void)
     gw_message_init(&msg);
     strcpy(msg.type, GW_MSG_TYPE_DEVICE_ACK);
     strcpy(msg.command, "ok");
-    memset(msg.device_type, 'T', sizeof(msg.device_type)); /* 16, no NUL */
+    memset(msg.name, 'N', sizeof(msg.name)); /* 32, no NUL */
     CHECK_INT(gw_message_encode(&msg, buf, sizeof(buf)), GW_ERR_VALIDATION);
 }
 
@@ -529,7 +556,7 @@ int main(void)
     test_decode_rejections();
     test_encode_validation();
     test_string_limits();
-    test_capability_v3_roundtrip();
+    test_capability_roundtrip();
     test_feature_v4_roundtrip();
 
     printf("gateway_protocol: %d checks, %d failures\n", g_checks, g_failures);

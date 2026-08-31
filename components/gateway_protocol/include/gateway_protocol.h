@@ -1,5 +1,5 @@
 /*
- * gateway_protocol — ESP-GATT Protocol v3/v4 wire contract (Device side).
+ * gateway_protocol — ESP-GATT Protocol v4 wire contract (Device side).
  *
  * Single source of truth for protocol constants and CBOR message codec
  * shared with esp-ble-gateway. DO NOT fork per product. When the shared
@@ -35,7 +35,6 @@ extern "C" {
 #define GW_MSG_DEVICE_ID_LEN      32u
 #define GW_MSG_COMMAND_LEN        32u
 #define GW_MSG_NAME_LEN           32u
-#define GW_MSG_DEVICE_TYPE_LEN    16u
 #define GW_MSG_CAP_LABEL_LEN      32u
 #define GW_MSG_CAP_UNIT_LEN       12u
 #define GW_FEATURE_ID_LEN          32u
@@ -63,7 +62,9 @@ enum {
     GW_KEY_INT_VALUE = 4,
     GW_KEY_BOOL_VALUE = 5,
     GW_KEY_NAME = 6,
-    GW_KEY_DEVICE_TYPE = 7,
+    /* 7 reserved since v4 (former device_type key). Never emitted; ignored
+     * on decode. Do not renumber. */
+    GW_KEY_RESERVED_7 = 7,
     GW_KEY_BLE_ADDR = 8,
     GW_KEY_BLE_ADDR_TYPE = 9,
     GW_KEY_REQUEST_ID = 10,
@@ -145,7 +146,6 @@ typedef struct {
     int has_bool_value;
     int has_device_id;
     char name[GW_MSG_NAME_LEN];
-    char device_type[GW_MSG_DEVICE_TYPE_LEN];
     uint8_t ble_addr[6];
     uint8_t ble_addr_type;
     int has_ble_addr;
@@ -201,17 +201,19 @@ uint16_t gw_ble_max_tx_payload(uint16_t negotiated_mtu);
  * ------------------------------------------------------------------ */
 
 /* Encode msg as CBOR map into out_buf.
- * Always emits: protocol_version, type, command, int_value, bool_value.
- * Emits optionally: device_id, request_id, name, device_type,
- * ble_addr(+ble_addr_type), protocol-v3 capability metadata and protocol-v4
- * semantic feature metadata/value fields.
+ * Always emits: protocol_version (must equal GW_PROTOCOL_VERSION), type,
+ * command, int_value, bool_value.
+ * Emits optionally: device_id, request_id, name, ble_addr(+ble_addr_type),
+ * capability metadata and v4 semantic feature metadata/value fields.
+ * Key 7 is reserved and never emitted.
  * Returns encoded length (>0) or negative gw_result_t. */
 int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf,
                       size_t out_cap);
 
 /* Decode CBOR map into out_msg. Strict against current Gateway decoder:
- * requires type, command, int_value, bool_value; version in 1..3
- * (absent -> defaults to 3); request_id if present in 1..UINT32_MAX;
+ * requires protocol_version == GW_PROTOCOL_VERSION (absent or any other
+ * version is rejected), type, command, int_value, bool_value;
+ * request_id if present in 1..UINT32_MAX; reserved key 7 is ignored;
  * total length <= GW_MSG_MAX_LEN; no trailing bytes.
  * Returns GW_OK or negative gw_result_t. */
 int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg);

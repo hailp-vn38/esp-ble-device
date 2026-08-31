@@ -52,7 +52,7 @@ static void test_ack_exact_route_echo(void)
 
     /* Simulate incoming command with Gateway-assigned routing ID. */
     gw_message_init(&request);
-    request.protocol_version = 3;
+    request.protocol_version = GW_PROTOCOL_VERSION;
     strcpy(request.type, GW_MSG_TYPE_DEVICE_COMMAND);
     strcpy(request.device_id, "lamp-1");
     request.has_device_id = 1;
@@ -97,7 +97,7 @@ static void test_ack_never_uses_native_model(void)
 
     /* Simulate incoming command with Gateway-assigned routing ID. */
     gw_message_init(&request);
-    request.protocol_version = 3;
+    request.protocol_version = GW_PROTOCOL_VERSION;
     strcpy(request.type, GW_MSG_TYPE_DEVICE_COMMAND);
     strcpy(request.device_id, "lamp-1");
     request.has_device_id = 1;
@@ -133,7 +133,7 @@ static void test_capability_exact_route_echo(void)
 
     /* Simulate incoming describe_capabilities command. */
     gw_message_init(&request);
-    request.protocol_version = 3;
+    request.protocol_version = GW_PROTOCOL_VERSION;
     strcpy(request.type, GW_MSG_TYPE_DEVICE_COMMAND);
     strcpy(request.device_id, "lamp-1");
     request.has_device_id = 1;
@@ -228,7 +228,7 @@ static void test_device_app_no_route_override(void)
      * falls back to request->device_id. */
     gw_message_t request, ack;
     gw_message_init(&request);
-    request.protocol_version = 3;
+    request.protocol_version = GW_PROTOCOL_VERSION;
     strcpy(request.type, GW_MSG_TYPE_DEVICE_COMMAND);
     strcpy(request.device_id, "lamp-1");
     request.has_device_id = 1;
@@ -269,7 +269,7 @@ static void test_native_model_metadata_only(void)
     /* But ACK/capability must NEVER use native model. */
     gw_message_t request, ack;
     gw_message_init(&request);
-    request.protocol_version = 3;
+    request.protocol_version = GW_PROTOCOL_VERSION;
     strcpy(request.type, GW_MSG_TYPE_DEVICE_COMMAND);
     strcpy(request.device_id, "lamp-1");
     request.has_device_id = 1;

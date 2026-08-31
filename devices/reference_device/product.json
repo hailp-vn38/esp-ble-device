@@ -1,7 +1,6 @@
 {
   "name": "reference_device",
   "model": "esp32s3-ref",
-  "device_type": "light",
   "target": "esp32s3",
   "chip": {
     "name": "ESP32-S3",
@@ -14,7 +13,7 @@
   },
   "hardware_version": "1.0",
   "firmware_version": "0.2.0",
-  "protocol_version": 3,
+  "protocol_version": 4,
   "capability_revision": 2,
   "pins": {
     "led": 8,

@@ -1,16 +1,17 @@
 /*
- * gateway_protocol — CBOR codec for ESP-GATT Protocol v3/v4 (Device side).
+ * gateway_protocol — CBOR codec for ESP-GATT Protocol v4 (Device side).
  *
  * Wire format: definite-length CBOR map with numeric keys, mirroring the
  * Gateway encoder (QCBOR) and decoder semantics:
- *  - required RX fields: type(1), command(3), int_value(4), bool_value(5)
- *  - protocol_version(0) optional on wire; absent -> v4; accepted 1..4
+ *  - required RX fields: protocol_version(0) == 4, type(1), command(3),
+ *    int_value(4), bool_value(5)
+ *  - any other protocol version (or absent version) is rejected
  *  - request_id(10) optional; if present must be 1..UINT32_MAX
+ *  - key 7 is reserved: never emitted, ignored on decode
  *  - unknown keys tolerated (skipped); no trailing bytes allowed
  *
- * Encoder always emits explicit protocol_version (v4 unless explicitly
- * overridden) per integration contract: new firmware MUST NOT rely
- * on decoder-side version fallback.
+ * Encoder always emits explicit protocol_version (v4) per strict-v4
+ * contract: no version fallback exists on either side.
  */
 #include "gateway_protocol.h"
 
@@ -171,14 +172,13 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
         return GW_ERR_INVALID_ARG;
     }
 
-    /* Contract: firmware emits v4 explicitly. Values above the current
-     * protocol are rejected before touching the output buffer. */
+    /* Contract: firmware emits exactly v4. Any other version (including
+     * zero/absent semantics) is rejected before touching the buffer. */
     uint64_t version = msg->protocol_version;
-    if (version == 0u) version = GW_PROTOCOL_VERSION;
-    if (version > GW_PROTOCOL_VERSION) {
+    if (version != (uint64_t)GW_PROTOCOL_VERSION) {
         GW_LOGE("encode: unsupported protocol_version %llu",
                 (unsigned long long)version);
-        return GW_ERR_VALIDATION;
+        return GW_ERR_UNSUPPORTED_VERSION;
     }
 
     if (msg->has_request_id && msg->request_id == 0u) {
@@ -192,8 +192,7 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
          msg->device_id[0] == '\0')) {
         return GW_ERR_VALIDATION;
     }
-    if (!gw_string_fits(msg->name, sizeof(msg->name)) ||
-        !gw_string_fits(msg->device_type, sizeof(msg->device_type))) {
+    if (!gw_string_fits(msg->name, sizeof(msg->name))) {
         return GW_ERR_VALIDATION;
     }
 
@@ -201,7 +200,6 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
     if (msg->has_device_id) pair_count++;
     if (msg->has_request_id) pair_count++;
     if (msg->name[0] != '\0') pair_count++;
-    if (msg->device_type[0] != '\0') pair_count++;
     if (msg->has_ble_addr) pair_count += 2;
     if (msg->has_snapshot_id) pair_count++;
     if (msg->has_sequence) pair_count++;
@@ -258,10 +256,7 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
         if (rc == GW_OK) rc = gw_put_text(&w, msg->name);
     }
 
-    if (rc == GW_OK && msg->device_type[0] != '\0') {
-        rc = gw_put_uint(&w, GW_KEY_DEVICE_TYPE);
-        if (rc == GW_OK) rc = gw_put_text(&w, msg->device_type);
-    }
+    /* Key 7 (GW_KEY_RESERVED_7) is never emitted since v4. */
 
     if (rc == GW_OK && msg->has_ble_addr) {
         rc = gw_put_uint(&w, GW_KEY_BLE_ADDR);
@@ -576,7 +571,7 @@ int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
     /* Every pair consumes at least two one-byte items. */
     if (pair_count > (uint64_t)len) return GW_ERR_DECODE;
 
-    uint64_t version = GW_PROTOCOL_VERSION;
+    uint64_t version = 0;
     bool has_version = false;
     bool has_type = false;
     bool has_command = false;
@@ -632,10 +627,7 @@ int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
             rc = gw_get_text(&r, out_msg->name, sizeof(out_msg->name), true);
             break;
 
-        case GW_KEY_DEVICE_TYPE:
-            rc = gw_get_text(&r, out_msg->device_type,
-                             sizeof(out_msg->device_type), true);
-            break;
+        /* GW_KEY_RESERVED_7: skip value, keep numeric contract stable. */
 
         case GW_KEY_BLE_ADDR: {
             uint8_t bytes_major = 0;
@@ -867,8 +859,8 @@ int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
     if (!has_type || !has_command || !has_int_value || !has_bool_value) {
         return GW_ERR_DECODE;
     }
-    if (has_version &&
-        (version == 0u || version > (uint64_t)GW_PROTOCOL_VERSION)) {
+    /* Strict v4: version must be present and exact; v1/v2/v3 reject. */
+    if (!has_version || version != (uint64_t)GW_PROTOCOL_VERSION) {
         GW_LOGE("decode: unsupported protocol_version %llu",
                 (unsigned long long)version);
         return GW_ERR_UNSUPPORTED_VERSION;
@@ -921,10 +913,7 @@ void gw_build_ack(gw_message_t *ack, const gw_message_t *request,
     ack->bool_value = success ? 1 : 0;
     ack->has_int_value = 1;
     ack->has_bool_value = 1;
-    if (request->protocol_version >= 1u &&
-        request->protocol_version <= GW_PROTOCOL_VERSION) {
-        ack->protocol_version = request->protocol_version;
-    }
+    /* Strict v4: ACKs always advertise the current protocol version. */
 }
 
 void gw_build_event(gw_message_t *event, const char *device_id,

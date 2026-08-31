@@ -190,8 +190,8 @@ static int encode_batch_message(ble_peripheral_notify_item_t *item,
 /* Emits begin -> item[0..N-1] -> end -> ACK as one transport batch. */
 static int send_capabilities(const gw_message_t *request)
 {
-    if (request->protocol_version < 3u || !request->has_device_id ||
-        !request->has_request_id) {
+    if (request->protocol_version != GW_PROTOCOL_VERSION ||
+        !request->has_device_id || !request->has_request_id) {
         return -1;
     }
 
@@ -262,6 +262,8 @@ static int send_capabilities(const gw_message_t *request)
         const device_feature_descriptor_t *feature = device_feature_get(i);
         init_capability_message(&message, request,
                                 GW_MSG_TYPE_FEATURE_ITEM, snapshot_id);
+        message.sequence = sequence++;
+        message.has_sequence = 1;
         strlcpy(message.feature_id, feature->feature_id,
                 sizeof(message.feature_id));
         message.has_feature_id = 1;

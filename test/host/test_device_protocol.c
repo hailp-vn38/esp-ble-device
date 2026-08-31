@@ -48,7 +48,7 @@ static int g_failures = 0;
 /* ------------------------------------------------------------------ *
  * DEV-PROTO-001 — Gateway command decode
  *
- * Decode actual/golden Gateway v3 set_led and preserve all required fields.
+ * Decode actual/golden Gateway v4 set_led and preserve all required fields.
  * ------------------------------------------------------------------ */
 
 static void test_gateway_command_decode(void)
@@ -58,7 +58,7 @@ static void test_gateway_command_decode(void)
 
     /* Build a set_led command (simulating Gateway output). */
     gw_message_init(&msg);
-    msg.protocol_version = 3;
+    msg.protocol_version = GW_PROTOCOL_VERSION;
     strcpy(msg.type, GW_MSG_TYPE_DEVICE_COMMAND);
     strcpy(msg.device_id, "lamp-1");
     msg.has_device_id = 1;
@@ -82,11 +82,11 @@ static void test_gateway_command_decode(void)
     CHECK(decoded.has_request_id == 1);
     CHECK(decoded.bool_value == 1);
     CHECK(decoded.int_value == 0);
-    CHECK(decoded.protocol_version == 3);
+    CHECK(decoded.protocol_version == GW_PROTOCOL_VERSION);
 
     /* Build a get_state command. */
     gw_message_init(&msg);
-    msg.protocol_version = 3;
+    msg.protocol_version = GW_PROTOCOL_VERSION;
     strcpy(msg.type, GW_MSG_TYPE_DEVICE_COMMAND);
     strcpy(msg.device_id, "lamp-1");
     msg.has_device_id = 1;
@@ -121,7 +121,7 @@ static void test_device_ack_encode(void)
 
     /* Build ACK for set_led success. */
     gw_message_init(&request);
-    request.protocol_version = 3;
+    request.protocol_version = GW_PROTOCOL_VERSION;
     strcpy(request.type, GW_MSG_TYPE_DEVICE_COMMAND);
     strcpy(request.device_id, "lamp-1");
     request.has_device_id = 1;
@@ -170,7 +170,7 @@ static void test_malformed_request_rejection(void)
 
     /* Missing type field. */
     static const uint8_t NO_TYPE[] = {
-        0xA6, 0x00, 0x03, 0x02, 0x66, 'l', 'a', 'm', 'p', '-', '1',
+        0xA6, 0x00, 0x04, 0x02, 0x66, 'l', 'a', 'm', 'p', '-', '1',
         0x03, 0x67, 's', 'e', 't', '_', 'l', 'e', 'd',
         0x04, 0x00, 0x05, 0xF5, 0x0A, 0x01,
     };
@@ -179,7 +179,7 @@ static void test_malformed_request_rejection(void)
 
     /* Missing command field. */
     static const uint8_t NO_COMMAND[] = {
-        0xA6, 0x00, 0x03, 0x01, 0x6E, 'd', 'e', 'v', 'i', 'c', 'e', '_',
+        0xA6, 0x00, 0x04, 0x01, 0x6E, 'd', 'e', 'v', 'i', 'c', 'e', '_',
         'c',  'o',  'm',  'm', 'a', 'n', 'd',
         0x02, 0x66, 'l', 'a', 'm', 'p', '-', '1',
         0x04, 0x00, 0x05, 0xF5, 0x0A, 0x01,
@@ -189,7 +189,7 @@ static void test_malformed_request_rejection(void)
 
     /* request_id = 0 (invalid per spec). */
     static const uint8_t REQUEST_ZERO[] = {
-        0xA7, 0x00, 0x03, 0x01, 0x6E, 'd', 'e', 'v', 'i', 'c', 'e', '_',
+        0xA7, 0x00, 0x04, 0x01, 0x6E, 'd', 'e', 'v', 'i', 'c', 'e', '_',
         'c',  'o',  'm',  'm', 'a', 'n', 'd',
         0x02, 0x66, 'l', 'a', 'm', 'p', '-', '1',
         0x03, 0x67, 's', 'e', 't', '_', 'l', 'e', 'd',
@@ -340,7 +340,7 @@ static void test_roundtrip_verification(void)
     /* ACK roundtrip. */
     gw_message_t request;
     gw_message_init(&request);
-    request.protocol_version = 3;
+    request.protocol_version = GW_PROTOCOL_VERSION;
     strcpy(request.type, GW_MSG_TYPE_DEVICE_COMMAND);
     strcpy(request.device_id, "lamp-1");
     request.has_device_id = 1;

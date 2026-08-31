@@ -71,7 +71,6 @@ typedef enum {
 
 typedef struct {
     const char *model;           /* Native identity, NOT Gateway routing ID */
-    const char *device_type;
     const char *hardware_version;
     const char *firmware_version;
     const char *ble_name_prefix;

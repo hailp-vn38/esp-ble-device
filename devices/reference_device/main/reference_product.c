@@ -80,11 +80,8 @@ static int ref_led_read_state(void *context, bool *out_value)
 static device_cmd_result_t cmd_set_led_handler(
     const gw_message_t *request, device_cmd_response_t *response)
 {
-    /* Keep accepting the legacy v2 integer form during the short window
-     * before the gateway has committed the v3 capability snapshot. */
-    bool new_state = request->protocol_version >= 3
-                         ? request->bool_value != 0
-                         : request->int_value != 0;
+    /* Protocol v4 carries the logical state in bool_value only. */
+    bool new_state = request->bool_value != 0;
     if (ref_led_apply(new_state, true) != 0) {
         response->success = false;
         response->int_value = s_led_state ? 1 : 0;
@@ -264,7 +261,6 @@ static int ref_register_features(void)
 
 static const device_app_profile_t s_profile = {
     .model = "esp32s3-ref",
-    .device_type = "light",
     .hardware_version = "1.0",
     .firmware_version = "0.2.0",
     .ble_name_prefix = "GW-REF",

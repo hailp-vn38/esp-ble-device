@@ -155,9 +155,8 @@ device_app_result_t device_app_start(void)
     if (rc != 0) return DEVICE_APP_ERR_BLE;
 
     s_app.started = true;
-    ESP_LOGI(TAG, "started (model=%s, type=%s)",
-             p->model ? p->model : "?",
-             p->device_type ? p->device_type : "?");
+    ESP_LOGI(TAG, "started (model=%s)",
+             p->model ? p->model : "?");
     return DEVICE_APP_OK;
 }
 

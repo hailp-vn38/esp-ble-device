@@ -42,11 +42,12 @@ static int gateway_style_decode(const uint8_t *buf, size_t len,
     QCBORDecode_EnterMap(&ctx, NULL);
     if (QCBORDecode_GetAndResetError(&ctx) != QCBOR_SUCCESS) return -1;
 
-    uint64_t version = GW_PROTOCOL_VERSION;
+    uint64_t version = 0;
     QCBORDecode_GetUInt64InMapN(&ctx, 0, &version);
     QCBORError err = QCBORDecode_GetAndResetError(&ctx);
-    if (err != QCBOR_SUCCESS && err != QCBOR_ERR_LABEL_NOT_FOUND) return -1;
-    if (version == 0 || version > GW_PROTOCOL_VERSION) return -1;
+    if (err != QCBOR_SUCCESS) return -1;
+    /* Strict v4 mirror: any other version (or absent) is rejected. */
+    if (version != GW_PROTOCOL_VERSION) return -1;
 
     UsefulBufC text;
     QCBORDecode_GetTextStringInMapN(&ctx, 1, &text);
@@ -176,9 +177,7 @@ static int gateway_style_encode(const gw_message_t *msg, uint8_t *out_buf,
     QCBOREncodeContext ctx;
     QCBOREncode_Init(&ctx, (UsefulBuf){out_buf, cap});
     QCBOREncode_OpenMap(&ctx);
-    QCBOREncode_AddUInt64ToMapN(&ctx, 0, msg->protocol_version
-                                            ? msg->protocol_version
-                                            : GW_PROTOCOL_VERSION);
+    QCBOREncode_AddUInt64ToMapN(&ctx, 0, msg->protocol_version);
     QCBOREncode_AddSZStringToMapN(&ctx, 1, msg->type);
     if (msg->has_device_id) {
         QCBOREncode_AddSZStringToMapN(&ctx, 2, msg->device_id);
@@ -192,9 +191,7 @@ static int gateway_style_encode(const gw_message_t *msg, uint8_t *out_buf,
     if (msg->name[0] != '\0') {
         QCBOREncode_AddSZStringToMapN(&ctx, 6, msg->name);
     }
-    if (msg->device_type[0] != '\0') {
-        QCBOREncode_AddSZStringToMapN(&ctx, 7, msg->device_type);
-    }
+    /* Key 7 is reserved since v4 and never emitted. */
     if (msg->has_ble_addr) {
         QCBOREncode_AddBytesToMapN(&ctx, 8,
                                    (UsefulBufC){msg->ble_addr,
@@ -338,7 +335,6 @@ int main(void)
     full.has_device_id = 1;
     strcpy(full.command, "ccccccccccccccccccccccccccccccc"); /* 31 */
     strcpy(full.name, "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn");    /* 31 */
-    strcpy(full.device_type, "ttttttttttttttt");             /* 15 */
     full.request_id = 4294967295u;
     full.has_request_id = 1;
     const uint8_t addr[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01 };
@@ -347,7 +343,7 @@ int main(void)
     full.has_ble_addr = 1;
     roundtrip(&full);
 
-    /* Protocol-v3 capability item in both wire directions. */
+    /* Capability item in both wire directions. */
     gw_message_t capability;
     gw_message_init(&capability);
     strcpy(capability.type, GW_MSG_TYPE_CAPABILITY_ITEM);
