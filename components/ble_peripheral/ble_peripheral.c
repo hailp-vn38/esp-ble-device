@@ -39,7 +39,10 @@
 #include "host/util/util.h"
 #include "os/os_mbuf.h"
 #include "host/ble_store.h"
+#include "host/ble_sm.h"
 
+/* Provided by NimBLE store/config component. */
+void ble_store_config_init(void);
 
 #include "gateway_protocol.h"
 
@@ -397,7 +400,10 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         xEventGroupClearBits(s_periph.ready_event, READY_BIT_ALL);
         set_state(BLE_PERIPH_CONNECTED);
 
-        ble_gap_security_initiate(s_periph.conn_handle);
+        /*
+         * Gateway is the BLE Central and owns security initiation.
+         * Peripheral waits for the Central's pairing/encryption procedure.
+         */
         return 0;
     }
 
@@ -422,16 +428,37 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_ENC_CHANGE: {
         if (event->enc_change.status == 0) {
-            ESP_LOGI(TAG, "security established");
+            struct ble_gap_conn_desc desc;
+            bool bonded = false;
+            bool encrypted = false;
+
+            if (ble_gap_conn_find(event->enc_change.conn_handle, &desc) == 0) {
+                bonded = desc.sec_state.bonded;
+                encrypted = desc.sec_state.encrypted;
+            }
+
+            ESP_LOGI(TAG,
+                     "security established: handle=%u encrypted=%d bonded=%d",
+                     event->enc_change.conn_handle,
+                     encrypted,
+                     bonded);
+
             s_periph.security_ok = true;
             xEventGroupSetBits(s_periph.ready_event, READY_BIT_SECURITY);
+
             if (s_periph.state == BLE_PERIPH_CONNECTED) {
                 set_state(BLE_PERIPH_SECURING);
             }
+
             ready_gate_check();
         } else {
-            ESP_LOGW(TAG, "security failed: %d", event->enc_change.status);
+            ESP_LOGW(TAG,
+                     "security failed: handle=%u status=%d (0x%04X)",
+                     event->enc_change.conn_handle,
+                     event->enc_change.status,
+                     event->enc_change.status);
         }
+
         return 0;
     }
 
@@ -544,10 +571,32 @@ int ble_peripheral_start(void)
 
     ble_hs_cfg.reset_cb = on_ble_host_reset;
     ble_hs_cfg.sync_cb = on_ble_host_sync;
+
+    /*
+     * Security model:
+     * - Bonding enabled for gateway devices.
+     * - LE Secure Connections.
+     * - Just Works / no MITM because both sides are NO_IO.
+     */
     ble_hs_cfg.sm_bonding = s_periph.cfg.require_bonding ? 1 : 0;
     ble_hs_cfg.sm_sc = 1;
     ble_hs_cfg.sm_mitm = 0;
     ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
+
+    /*
+     * Persist LTK/security material.
+     *
+     * Without a configured store, bonding can become inconsistent across
+     * reconnects/reboots and lead to SMP failures.
+     */
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+
+    if (s_periph.cfg.require_bonding) {
+        ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
+        ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
+    }
+
+    ble_store_config_init();
 
     int rc = ble_gatts_count_cfg(gatt_services);
     if (rc != 0) {
