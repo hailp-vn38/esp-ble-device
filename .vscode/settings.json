@@ -23,7 +23,7 @@
     "board/esp32-wrover-kit-3.3v.cfg"
   ],
   "idf.port": "detect",
-  "idf.currentSetup": "/Users/lamphuchai/.espressif/v5.4.4/esp-idf",
+  "idf.currentSetup": "/Users/lamphuchai/.espressif/v6.1-rc1/esp-idf",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32"
   },

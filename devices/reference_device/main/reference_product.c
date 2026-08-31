@@ -4,6 +4,18 @@
  * Hardware: 1 LED (GPIO8) + 1 button (GPIO9, active-low with pull-up).
  * Commands: set_led, get_state.
  * Events: button_pressed, state_changed.
+ *
+ * Capability registration (spec D6, D7, D8):
+ *   - set_led: BOOL, IDEMPOTENT, PUBLIC
+ *   - get_state: NONE, IDEMPOTENT, PUBLIC (promoted from internal built-in)
+ *
+ * Registration order is DETERMINISTIC and becomes PRESENTATION ORDER (spec D8):
+ *   1. set_led (sequence 0)
+ *   2. get_state (sequence 1)
+ *
+ * Capability revision: 1 (initial version)
+ *   - Increment when public capability schema changes (spec D7)
+ *   - Does NOT need to increment when runtime value changes
  */
 #include "reference_product.h"
 
@@ -160,7 +172,11 @@ static int ref_product_stop(void)
 }
 
 /* ------------------------------------------------------------------ *
- * Command registration
+ * Command registration (spec D6, D7, D8)
+ *
+ * Registration order is DETERMINISTIC and becomes PRESENTATION ORDER.
+ * Built-in commands (ping, get_info) are INTERNAL by default.
+ * get_state is PROMOTED from internal built-in to PUBLIC here.
  * ------------------------------------------------------------------ */
 
 static int ref_register_commands(void)
@@ -179,6 +195,8 @@ static int ref_register_commands(void)
         .value_type = DEVICE_CMD_VALUE_NONE,
         .flags = DEVICE_CMD_FLAG_IDEMPOTENT,
     };
+    /* Register in deterministic order: set_led first, get_state second.
+     * This order is frozen and becomes PRESENTATION ORDER (spec D8). */
     if (device_command_register_capability(&set_led,
                                            cmd_set_led_handler) != 0 ||
         device_command_register_capability(&get_state,
@@ -199,6 +217,14 @@ static int ref_register_events(void)
  * Profile
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Profile (spec D7, §17)
+ *
+ * Capability revision: 1 (initial version)
+ *   - Increment when public capability schema changes (spec D7)
+ *   - Does NOT need to increment when runtime value changes
+ * ------------------------------------------------------------------ */
+
 static const device_app_profile_t s_profile = {
     .model = "esp32s3-ref",
     .device_type = "light",
@@ -206,7 +232,7 @@ static const device_app_profile_t s_profile = {
     .firmware_version = "0.1.0",
     .ble_name_prefix = "GW-REF",
     .protocol_version = GW_PROTOCOL_VERSION,
-    .capability_revision = 1,
+    .capability_revision = 1,  /* Spec D7: bump when public metadata changes */
     .supports_factory_reset = true,
     .supports_telemetry = true,
     .supports_local_button = true,

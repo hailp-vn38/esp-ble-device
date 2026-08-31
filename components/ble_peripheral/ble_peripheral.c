@@ -9,9 +9,15 @@
  *   - Connection state: MTU, CCCD, security tracking
  *   - State machine: STOPPED -> INITIALIZED -> ADVERTISING -> CONNECTED
  *     -> SECURING -> WAIT_CCCD -> READY -> ADVERTISING
- *   - Bounded RX callback (copy + enqueue)
+ *   - Bounded RX callback (copy + enqueue, NO heap allocation)
  *   - Notify TX via queue + worker task
  *   - Bond clearing for factory reset
+ *   - Repeat pairing recovery with stale bond cleanup
+ *
+ * Spec references:
+ *   - §9 (GATT write callback target): no malloc/calloc/free in callback
+ *   - §19 (Repeat pairing recovery): remove stale bond before retry
+ *   - §10 (Command RX pipeline): bounded raw queue
  */
 #include "ble_peripheral.h"
 
@@ -32,6 +38,7 @@
 #include "host/ble_gatt.h"
 #include "host/util/util.h"
 #include "os/os_mbuf.h"
+#include "host/ble_store.h"
 
 
 #include "gateway_protocol.h"
@@ -99,6 +106,16 @@ static struct {
     EventGroupHandle_t ready_event;
     SemaphoreHandle_t notify_submit_mutex;
     bool adv_active;
+
+    /* Diagnostics (spec §24: queue/drop diagnostics). */
+    struct {
+        uint32_t rx_queued;
+        uint32_t rx_dropped;
+        uint32_t notify_queued;
+        uint32_t notify_dropped;
+        uint32_t notify_batch_rejected;
+        uint32_t repeat_pairing_count;
+    } diag;
 } s_periph;
 
 /* ------------------------------------------------------------------ *
@@ -218,13 +235,20 @@ static void notify_worker(void *arg)
     while (1) {
         if (xQueueReceive(s_periph.notify_queue, &msg, portMAX_DELAY) != pdTRUE)
             continue;
-        if (s_periph.conn_handle == BLE_HS_CONN_HANDLE_NONE) continue;
+        if (s_periph.conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+            s_periph.diag.notify_dropped++;
+            continue;
+        }
 
         struct os_mbuf *om = os_msys_get_pkthdr(0, 0);
-        if (om == NULL) continue;
+        if (om == NULL) {
+            s_periph.diag.notify_dropped++;
+            continue;
+        }
         int rc = os_mbuf_append(om, msg.data, msg.len);
         if (rc != 0) {
             os_mbuf_free_chain(om);
+            s_periph.diag.notify_dropped++;
             continue;
         }
         /* ble_gatts_notify_custom consumes om regardless of outcome. */
@@ -232,6 +256,9 @@ static void notify_worker(void *arg)
                                      s_periph.status_val_handle, om);
         if (rc != 0 && rc != BLE_HS_ENOTCONN) {
             ESP_LOGW(TAG, "notify failed: %d", rc);
+            s_periph.diag.notify_dropped++;
+        } else {
+            s_periph.diag.notify_queued++;
         }
     }
 }
@@ -275,6 +302,10 @@ static const struct ble_gatt_svc_def gatt_services[] = {
 
 /* ------------------------------------------------------------------ *
  * GATT access callbacks
+ *
+ * Spec §9: GATT command-write callback must NOT heap allocate.
+ * Direct os_mbuf_copydata into queue object (bounded copy).
+ * No malloc/calloc/free/CBOR decode/command execution in callback.
  * ------------------------------------------------------------------ */
 
 static int cmd_chr_write_cb(uint16_t conn_handle, uint16_t attr_handle,
@@ -286,17 +317,24 @@ static int cmd_chr_write_cb(uint16_t conn_handle, uint16_t attr_handle,
     size_t len = OS_MBUF_PKTLEN(om);
     if (len == 0 || len > GW_MSG_MAX_LEN) return 0;
 
-    uint8_t *buf = malloc(len);
-    if (buf == NULL) return 0;
-    os_mbuf_copydata(om, 0, len, buf);
+    /* Bounded copy directly from os_mbuf into queue object.
+     * No heap allocation (spec §9, §10). */
+    rx_msg_t rx = {
+        .len = (uint16_t)len,
+    };
 
-    rx_msg_t rx = { .len = (uint16_t)len };
-    memcpy(rx.data, buf, len);
+    if (os_mbuf_copydata(om, 0, len, rx.data) != 0) {
+        ESP_LOGW(TAG, "RX copy failed");
+        return 0;
+    }
 
     if (xQueueSend(s_periph.rx_queue, &rx, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "RX queue full, dropping %zu bytes", len);
+        s_periph.diag.rx_dropped++;
+        ESP_LOGW(TAG, "RX queue full, dropping %zu bytes (total dropped: %lu)",
+                 len, (unsigned long)s_periph.diag.rx_dropped);
+    } else {
+        s_periph.diag.rx_queued++;
     }
-    free(buf);
     return 0;
 }
 
@@ -419,7 +457,26 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
     }
 
     case BLE_GAP_EVENT_REPEAT_PAIRING: {
-        ESP_LOGW(TAG, "repeat pairing — retrying");
+        /* Spec §19: Repeat pairing recovery.
+         * When peer requests repeat pairing because one side lost bond,
+         * we must remove stale local bond for that peer before retrying.
+         * This prevents tight loop and ensures clean re-pairing. */
+        s_periph.diag.repeat_pairing_count++;
+        ESP_LOGW(TAG, "repeat pairing — removing stale bond for peer (count: %lu)",
+                 (unsigned long)s_periph.diag.repeat_pairing_count);
+
+        /* Delete stale security material for this specific peer.
+         * Use conn_handle to find the peer address, then delete its bonds. */
+        struct ble_gap_conn_desc desc;
+        int rc = ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
+        if (rc == 0) {
+            /* Peer found — delete its security records using peer-specific API. */
+            ble_store_util_delete_peer(&desc.peer_id_addr);
+            ESP_LOGI(TAG, "stale bond removed for peer, retrying pairing");
+        } else {
+            ESP_LOGW(TAG, "could not identify peer for bond cleanup (rc=%d)", rc);
+        }
+
         return BLE_GAP_REPEAT_PAIRING_RETRY;
     }
 
@@ -583,8 +640,12 @@ int ble_peripheral_notify_batch(const ble_peripheral_notify_item_t *items,
 
 done:
     xSemaphoreGive(s_periph.notify_submit_mutex);
-    if (result != 0) ESP_LOGW(TAG, "notify batch rejected (count=%u)",
-                              (unsigned)count);
+    if (result != 0) {
+        s_periph.diag.notify_batch_rejected++;
+        ESP_LOGW(TAG, "notify batch rejected (count=%u, total rejected: %lu)",
+                 (unsigned)count,
+                 (unsigned long)s_periph.diag.notify_batch_rejected);
+    }
     return result;
 }
 
@@ -620,4 +681,19 @@ int ble_peripheral_clear_bonds(void)
         ESP_LOGI(TAG, "all bonds cleared");
     }
     return rc;
+}
+
+/* ------------------------------------------------------------------ *
+ * Diagnostics (spec §24)
+ * ------------------------------------------------------------------ */
+
+void ble_peripheral_get_diag(ble_peripheral_diag_t *out_diag)
+{
+    if (out_diag == NULL) return;
+    out_diag->rx_queued = s_periph.diag.rx_queued;
+    out_diag->rx_dropped = s_periph.diag.rx_dropped;
+    out_diag->notify_queued = s_periph.diag.notify_queued;
+    out_diag->notify_dropped = s_periph.diag.notify_dropped;
+    out_diag->notify_batch_rejected = s_periph.diag.notify_batch_rejected;
+    out_diag->repeat_pairing_count = s_periph.diag.repeat_pairing_count;
 }

@@ -134,6 +134,22 @@ ble_peripheral_state_t ble_peripheral_get_state(void);
  */
 int ble_peripheral_clear_bonds(void);
 
+/* ------------------------------------------------------------------ *
+ * Diagnostics (spec §24)
+ * ------------------------------------------------------------------ */
+
+typedef struct {
+    uint32_t rx_queued;
+    uint32_t rx_dropped;
+    uint32_t notify_queued;
+    uint32_t notify_dropped;
+    uint32_t notify_batch_rejected;
+    uint32_t repeat_pairing_count;
+} ble_peripheral_diag_t;
+
+/* Get current diagnostic counters. */
+void ble_peripheral_get_diag(ble_peripheral_diag_t *out_diag);
+
 #ifdef __cplusplus
 }
 #endif

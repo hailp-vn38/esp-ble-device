@@ -2,6 +2,12 @@
  * device_app — composition root (docs §9..#12, §86..#90).
  *
  * Orchestrates the 16-step boot sequence and lifecycle.
+ *
+ * Routing identity rules (spec D2, D3, D4):
+ *   - s_app.device_id is NATIVE identity (model-derived, e.g. "esp32s3-ref")
+ *   - Used ONLY for spontaneous device_event metadata (button_pressed, etc.)
+ *   - NEVER used for ACK/capability response routing (those use request->device_id)
+ *   - device_command_set_device_id() is DEPRECATED and NOT called here
  */
 #include "device_app.h"
 
@@ -24,6 +30,9 @@ static const char *TAG = "device_app";
 static struct {
     const device_app_profile_t *profile;
     bool started;
+    /* Native device identity (model-derived). Used ONLY for spontaneous
+     * device_event metadata. NEVER used for ACK/capability routing
+     * (spec D4). */
     char device_id[GW_MSG_DEVICE_ID_LEN];
 } s_app;
 
@@ -191,7 +200,9 @@ device_app_result_t device_app_set_profile(const device_app_profile_t *profile)
     if (profile == NULL) return DEVICE_APP_ERR_INVALID_ARG;
     s_app.profile = profile;
 
-    /* Build device_id from model. */
+    /* Build native device_id from model (spec D4).
+     * This is NATIVE identity for events only, NOT Gateway routing ID.
+     * ACK routing always uses request->device_id from incoming commands. */
     if (profile->model) {
         strlcpy(s_app.device_id, profile->model, sizeof(s_app.device_id));
     }

@@ -16,9 +16,22 @@
  *   type = device_ack
  *   request_id = exact echo
  *   command = exact echo
- *   device_id = logical identity
+ *   device_id = exact request->device_id (Gateway routing identity, NOT native model)
  *   bool_value = success/failure
  *   int_value = result/state
+ *
+ * Routing identity rules (spec D2, D3):
+ *   - ACK always echoes request->device_id (Gateway-assigned routing ID)
+ *   - Native model (e.g. "esp32s3-ref") is metadata only, never used for ACK routing
+ *   - device_command_set_device_id() is DEPRECATED and should not be called
+ *
+ * Capability registry rules (spec D5, D6, D7, D8):
+ *   - Registry order is DETERMINISTIC and treated as PRESENTATION ORDER (spec D8)
+ *   - Built-in commands (ping, get_info) are INTERNAL by default (spec D6)
+ *   - get_state is INTERNAL by default but can be PROMOTED by product (spec D6)
+ *   - Capability revision must bump when public metadata changes (spec D7)
+ *   - Capability order is frozen after device_command_freeze() (spec D8)
+ *   - Max public capabilities: 12 (spec §4.6)
  */
 #include "device_command.h"
 
@@ -276,8 +289,9 @@ static void send_ack(const gw_message_t *request, bool success, int int_value)
     if (s_cmd.notify_fn == NULL) return;
 
     gw_message_t ack;
-    gw_build_ack(&ack, request, s_cmd.has_device_id ? s_cmd.device_id : NULL,
-                 success, int_value);
+    /* Spec D2/D3: ACK must always echo request->device_id (Gateway routing
+     * identity). Never override with configured native ID (s_cmd.device_id). */
+    gw_build_ack(&ack, request, request->device_id, success, int_value);
 
     uint8_t buf[GW_MSG_MAX_LEN];
     int encoded = gw_message_encode(&ack, buf, sizeof(buf));
@@ -351,7 +365,16 @@ static void cmd_worker(void *arg)
 }
 
 /* ------------------------------------------------------------------ *
- * Built-in commands (doc §27)
+ * Built-in commands (spec D6, §16)
+ *
+ * Policy:
+ *   - ping: INTERNAL by default, NOT advertised
+ *   - get_info: INTERNAL by default, NOT advertised
+ *   - get_state: INTERNAL by default, but can be PROMOTED by product
+ *                via device_command_register_capability()
+ *
+ * Reference product promotes get_state to PUBLIC (spec §17.2).
+ * ping/get_info remain INTERNAL unless explicitly promoted.
  * ------------------------------------------------------------------ */
 
 static device_cmd_result_t cmd_ping_handler(
@@ -390,7 +413,9 @@ int device_command_init(int (*notify_fn)(const uint8_t *, size_t))
     s_cmd.rx_queue = xQueueCreate(CMD_RX_QUEUE_DEPTH, sizeof(cmd_rx_msg_t));
     if (s_cmd.rx_queue == NULL) return -1;
 
-    /* Register common commands (doc §27). */
+    /* Register built-in commands in deterministic order (spec D6, D8).
+     * This order is frozen and becomes the PRESENTATION ORDER for
+     * capability responses. Built-ins are INTERNAL by default. */
     device_command_register("ping", cmd_ping_handler);
     device_command_register("get_info", cmd_get_info_handler);
     device_command_register("get_state", cmd_get_state_handler);
@@ -434,6 +459,9 @@ int device_command_register_capability(
 
     cmd_entry_t *entry = find_entry(capability->command);
     if (entry == NULL) {
+        /* New capability — add at end of registry (spec D8).
+         * Registry order is DETERMINISTIC and becomes PRESENTATION ORDER.
+         * Must not exceed max public capabilities (spec §4.6). */
         if (s_cmd.registry_count >= CMD_REGISTRY_MAX ||
             advertised_count() >= DEVICE_COMMAND_MAX_CAPABILITIES) {
             return -1;
@@ -443,6 +471,7 @@ int device_command_register_capability(
         strlcpy(entry->command, capability->command, sizeof(entry->command));
     } else if (!entry->advertised &&
                advertised_count() >= DEVICE_COMMAND_MAX_CAPABILITIES) {
+        /* Existing non-advertised command cannot be promoted if at limit. */
         return -1;
     }
 
@@ -470,7 +499,9 @@ int device_command_freeze(void)
     xTaskCreate(cmd_worker, "cmd_worker", CMD_TASK_STACK,
                 NULL, CMD_TASK_PRIORITY, &s_cmd.worker_task);
 
-    ESP_LOGI(TAG, "frozen (%d commands registered)", s_cmd.registry_count);
+    /* Log capability registry state for debugging (spec D8). */
+    ESP_LOGI(TAG, "frozen (%d commands registered, %d advertised)",
+             s_cmd.registry_count, advertised_count());
     return 0;
 }
 
@@ -497,14 +528,27 @@ int device_command_complete(const gw_message_t *request,
     return 0;
 }
 
+/* DEPRECATED: Do not use. ACK routing identity is always request->device_id.
+ * This function exists for backward compatibility only. */
 void device_command_set_device_id(const char *id)
 {
     if (id == NULL) return;
+    ESP_LOGW(TAG, "device_command_set_device_id() is deprecated; ACK routing uses request->device_id");
     strlcpy(s_cmd.device_id, id, sizeof(s_cmd.device_id));
     s_cmd.has_device_id = true;
 }
 
 void device_command_set_capability_revision(uint32_t revision)
 {
+    /* Spec D7: Capability revision belongs to product/schema owner.
+     * Must increment when public capability schema changes:
+     * - add/remove public command
+     * - change value type
+     * - change flags
+     * - change min/max/step
+     * - change label/unit
+     * - change public command presentation order (if intentionally changed)
+     *
+     * Does NOT need to increment when runtime value changes. */
     s_cmd.capability_revision = revision;
 }

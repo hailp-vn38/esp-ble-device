@@ -21,6 +21,12 @@
  *
  * Depends: gateway_protocol, ble_peripheral, device_command, device_event.
  * Does NOT: NimBLE, CBOR, GPIO directly.
+ *
+ * Routing identity rules (spec D2, D3, D4):
+ *   - profile.model is NATIVE identity (e.g. "esp32s3-ref")
+ *   - Native identity is for events/metadata only
+ *   - ACK/capability routing always uses request->device_id from Gateway
+ *   - device_command_set_device_id() is DEPRECATED and NOT called
  */
 #ifndef DEVICE_APP_H
 #define DEVICE_APP_H
@@ -56,10 +62,15 @@ typedef enum {
 
 /* ------------------------------------------------------------------ *
  * Product profile (docs §51, §11)
+ *
+ * Routing identity rules (spec D2, D3, D4):
+ *   - model: NATIVE identity (e.g. "esp32s3-ref"), used for events only
+ *   - NOT used for ACK routing (that uses request->device_id from Gateway)
+ *   - device_command_set_device_id() is DEPRECATED and NOT called
  * ------------------------------------------------------------------ */
 
 typedef struct {
-    const char *model;
+    const char *model;           /* Native identity, NOT Gateway routing ID */
     const char *device_type;
     const char *hardware_version;
     const char *firmware_version;
