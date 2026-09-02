@@ -80,17 +80,21 @@ static int ref_led_read_state(void *context, bool *out_value)
 static device_cmd_result_t cmd_set_led_handler(
     const gw_message_t *request, device_cmd_response_t *response)
 {
-    /* Protocol v4 carries the logical state in bool_value only. */
     bool new_state = request->bool_value != 0;
+
     if (ref_led_apply(new_state, true) != 0) {
         response->success = false;
         response->int_value = s_led_state ? 1 : 0;
         return DEVICE_CMD_ERR_HANDLER;
     }
-    ESP_LOGI(TAG, "LED -> %s", new_state ? "ON" : "OFF");
+
+    ESP_LOGI(TAG, "LED -> %s", s_led_state ? "ON" : "OFF");
 
     response->success = true;
-    response->int_value = new_state ? 1 : 0;
+    response->int_value = s_led_state ? 1 : 0;
+
+    device_command_response_set_feature_bool(
+        response, "led_main", GW_PROP_ON_OFF, s_led_state);
 
     return DEVICE_CMD_OK;
 }
@@ -98,8 +102,14 @@ static device_cmd_result_t cmd_set_led_handler(
 static device_cmd_result_t cmd_get_state_handler(
     const gw_message_t *request, device_cmd_response_t *response)
 {
+    (void)request;
+
     response->success = true;
     response->int_value = s_led_state ? 1 : 0;
+
+    device_command_response_set_feature_bool(
+        response, "led_main", GW_PROP_ON_OFF, s_led_state);
+
     return DEVICE_CMD_OK;
 }
 

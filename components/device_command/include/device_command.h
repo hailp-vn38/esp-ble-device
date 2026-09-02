@@ -17,8 +17,14 @@
  *   request_id = exact echo
  *   command = exact echo
  *   device_id = exact request->device_id (Gateway routing identity, NOT native model)
- *   bool_value = success/failure
- *   int_value = result/state
+ *   bool_value = command success/failure
+ *   int_value = legacy/general result value
+ *
+ *   Structured feature state (when command mutates a semantic feature):
+ *     feature_id, property_id, feature_value_bool / feature_value_int
+ *
+ *   Writable semantic feature handlers SHOULD include the actual
+ *   post-command feature state in the ACK.
  *
  * Routing identity rules (spec D2, D3):
  *   - ACK always echoes request->device_id (Gateway-assigned routing ID)
@@ -133,6 +139,15 @@ void device_command_set_device_id(const char *id) __attribute__((deprecated("ACK
  * Must be called before device_command_freeze().
  * Must increment when public capability schema changes (spec D7). */
 void device_command_set_capability_revision(uint32_t revision);
+
+/* Populate a structured boolean feature state in a command response.
+ * Product command handlers SHOULD call this after applying hardware state
+ * to include authoritative post-command feature state in the ACK. */
+int device_command_response_set_feature_bool(
+    device_cmd_response_t *response,
+    const char *feature_id,
+    uint8_t property_id,
+    bool value);
 
 #ifdef __cplusplus
 }
