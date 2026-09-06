@@ -108,6 +108,8 @@ static struct {
 
     EventGroupHandle_t ready_event;
     SemaphoreHandle_t notify_submit_mutex;
+    bool notify_sequence_active;
+    bool notify_sequence_failed;
     bool adv_active;
 
     /* Diagnostics (spec §24: queue/drop diagnostics). */
@@ -118,6 +120,11 @@ static struct {
         uint32_t notify_dropped;
         uint32_t notify_batch_rejected;
         uint32_t repeat_pairing_count;
+        uint32_t notify_sequence_started;
+        uint32_t notify_sequence_completed;
+        uint32_t notify_sequence_aborted;
+        uint32_t notify_sequence_timeout;
+        uint32_t notify_oversize;
     } diag;
 } s_periph;
 
@@ -647,23 +654,114 @@ int ble_peripheral_notify(const uint8_t *data, size_t len)
     return ble_peripheral_notify_batch(&item, 1);
 }
 
-int ble_peripheral_notify_batch(const ble_peripheral_notify_item_t *items,
-                                size_t count)
+static void notify_sequence_mark_failed(void)
 {
-    if (items == NULL || count == 0 || count > BLE_NOTIFY_QUEUE_DEPTH ||
-        s_periph.notify_submit_mutex == NULL ||
+    s_periph.notify_sequence_failed = true;
+}
+
+int ble_peripheral_notify_sequence_begin(void)
+{
+    if (s_periph.notify_submit_mutex == NULL ||
         xSemaphoreTake(s_periph.notify_submit_mutex,
                        pdMS_TO_TICKS(1000)) != pdTRUE) {
         return -1;
     }
 
+    s_periph.notify_sequence_active = true;
+    s_periph.notify_sequence_failed = false;
+    s_periph.diag.notify_sequence_started++;
+    return 0;
+}
+
+int ble_peripheral_notify_sequence_send(const uint8_t *data,
+                                        size_t len,
+                                        TickType_t timeout)
+{
+    if (!s_periph.notify_sequence_active) return -1;
+
+    if (data == NULL || len == 0 || len > GW_MSG_MAX_LEN ||
+        s_periph.state != BLE_PERIPH_READY || !s_periph.cccd_enabled) {
+        notify_sequence_mark_failed();
+        return -1;
+    }
+
+    uint16_t max_payload = gw_ble_max_tx_payload(s_periph.mtu);
+    if (len > max_payload) {
+        s_periph.diag.notify_oversize++;
+        notify_sequence_mark_failed();
+        return -1;
+    }
+
+    notify_msg_t msg = {.len = (uint16_t)len};
+    memcpy(msg.data, data, len);
+
+    TickType_t started = xTaskGetTickCount();
+    for (;;) {
+        if (s_periph.state != BLE_PERIPH_READY ||
+            !s_periph.cccd_enabled) {
+            notify_sequence_mark_failed();
+            return -1;
+        }
+
+        TickType_t wait = pdMS_TO_TICKS(1);
+        if (timeout != portMAX_DELAY) {
+            TickType_t elapsed = xTaskGetTickCount() - started;
+            if (elapsed >= timeout) {
+                s_periph.diag.notify_sequence_timeout++;
+                notify_sequence_mark_failed();
+                return -1;
+            }
+            TickType_t remaining = timeout - elapsed;
+            if (remaining < wait) wait = remaining;
+        }
+
+        if (xQueueSend(s_periph.notify_queue, &msg, wait) == pdTRUE) {
+            return 0;
+        }
+    }
+}
+
+void ble_peripheral_notify_sequence_abort(void)
+{
+    if (!s_periph.notify_sequence_active) return;
+    notify_sequence_mark_failed();
+}
+
+void ble_peripheral_notify_sequence_end(void)
+{
+    if (!s_periph.notify_sequence_active) return;
+
+    bool failed = s_periph.notify_sequence_failed;
+    s_periph.notify_sequence_active = false;
+    s_periph.notify_sequence_failed = false;
+    if (failed) {
+        s_periph.diag.notify_sequence_aborted++;
+    } else {
+        s_periph.diag.notify_sequence_completed++;
+    }
+    xSemaphoreGive(s_periph.notify_submit_mutex);
+}
+
+int ble_peripheral_notify_batch(const ble_peripheral_notify_item_t *items,
+                                size_t count)
+{
+    if (items == NULL || count == 0 || count > BLE_NOTIFY_QUEUE_DEPTH ||
+        ble_peripheral_notify_sequence_begin() != 0) {
+        return -1;
+    }
+
     int result = -1;
-    if (s_periph.state != BLE_PERIPH_READY || !s_periph.cccd_enabled) goto done;
+    if (s_periph.state != BLE_PERIPH_READY || !s_periph.cccd_enabled) {
+        notify_sequence_mark_failed();
+        goto done;
+    }
 
     uint16_t max_payload = gw_ble_max_tx_payload(s_periph.mtu);
     for (size_t i = 0; i < count; i++) {
         if (items[i].data == NULL || items[i].len == 0 ||
             items[i].len > max_payload || items[i].len > GW_MSG_MAX_LEN) {
+            if (items[i].len > max_payload) s_periph.diag.notify_oversize++;
+            notify_sequence_mark_failed();
             goto done;
         }
     }
@@ -675,6 +773,10 @@ int ble_peripheral_notify_batch(const ble_peripheral_notify_item_t *items,
     while (uxQueueSpacesAvailable(s_periph.notify_queue) < count) {
         if (s_periph.state != BLE_PERIPH_READY ||
             (int32_t)(deadline - xTaskGetTickCount()) <= 0) {
+            if ((int32_t)(deadline - xTaskGetTickCount()) <= 0) {
+                s_periph.diag.notify_sequence_timeout++;
+            }
+            notify_sequence_mark_failed();
             goto done;
         }
         vTaskDelay(pdMS_TO_TICKS(1));
@@ -683,12 +785,16 @@ int ble_peripheral_notify_batch(const ble_peripheral_notify_item_t *items,
     for (size_t i = 0; i < count; i++) {
         notify_msg_t msg = {.len = (uint16_t)items[i].len};
         memcpy(msg.data, items[i].data, items[i].len);
-        if (xQueueSend(s_periph.notify_queue, &msg, 0) != pdTRUE) goto done;
+        if (xQueueSend(s_periph.notify_queue, &msg, 0) != pdTRUE) {
+            notify_sequence_mark_failed();
+            goto done;
+        }
     }
     result = 0;
 
 done:
-    xSemaphoreGive(s_periph.notify_submit_mutex);
+    if (result != 0) notify_sequence_mark_failed();
+    ble_peripheral_notify_sequence_end();
     if (result != 0) {
         s_periph.diag.notify_batch_rejected++;
         ESP_LOGW(TAG, "notify batch rejected (count=%u, total rejected: %lu)",
@@ -745,4 +851,9 @@ void ble_peripheral_get_diag(ble_peripheral_diag_t *out_diag)
     out_diag->notify_dropped = s_periph.diag.notify_dropped;
     out_diag->notify_batch_rejected = s_periph.diag.notify_batch_rejected;
     out_diag->repeat_pairing_count = s_periph.diag.repeat_pairing_count;
+    out_diag->notify_sequence_started = s_periph.diag.notify_sequence_started;
+    out_diag->notify_sequence_completed = s_periph.diag.notify_sequence_completed;
+    out_diag->notify_sequence_aborted = s_periph.diag.notify_sequence_aborted;
+    out_diag->notify_sequence_timeout = s_periph.diag.notify_sequence_timeout;
+    out_diag->notify_oversize = s_periph.diag.notify_oversize;
 }

@@ -182,18 +182,16 @@ static void init_capability_message(gw_message_t *message,
     message->has_snapshot_id = 1;
 }
 
-static int encode_batch_message(ble_peripheral_notify_item_t *item,
-                                uint8_t storage[GW_MSG_MAX_LEN],
-                                const gw_message_t *message)
+static int send_capability_message(uint8_t storage[GW_MSG_MAX_LEN],
+                                   const gw_message_t *message)
 {
     int encoded = gw_message_encode(message, storage, GW_MSG_MAX_LEN);
     if (encoded <= 0) return encoded;
-    item->data = storage;
-    item->len = (size_t)encoded;
-    return GW_OK;
+    return ble_peripheral_notify_sequence_send(
+        storage, (size_t)encoded, pdMS_TO_TICKS(1000));
 }
 
-/* Emits begin -> item[0..N-1] -> end -> ACK as one transport batch. */
+/* Emits begin -> item[0..N-1] -> end -> ACK as one ordered stream. */
 static int send_capabilities(const gw_message_t *request)
 {
     if (request->protocol_version != GW_PROTOCOL_VERSION ||
@@ -205,20 +203,11 @@ static int send_capabilities(const gw_message_t *request)
     int feature_total = (int)device_feature_count();
     if (tool_total > DEVICE_COMMAND_MAX_CAPABILITIES ||
         feature_total > DEVICE_FEATURE_MAX_PER_DEVICE) return -1;
-    size_t batch_count = (size_t)tool_total + (size_t)feature_total + 3u;
-    ble_peripheral_notify_item_t *items =
-        calloc(batch_count, sizeof(*items));
-    uint8_t (*storage)[GW_MSG_MAX_LEN] =
-        calloc(batch_count, sizeof(*storage));
-    if (items == NULL || storage == NULL) {
-        free(items);
-        free(storage);
-        return -1;
-    }
+    uint8_t storage[GW_MSG_MAX_LEN];
+    if (ble_peripheral_notify_sequence_begin() != 0) return -1;
 
     uint32_t snapshot_id = ++s_cmd.next_snapshot_id;
     if (snapshot_id == 0u) snapshot_id = ++s_cmd.next_snapshot_id;
-    size_t out = 0;
     gw_message_t message;
     init_capability_message(&message, request,
                             GW_MSG_TYPE_CAPABILITIES_BEGIN, snapshot_id);
@@ -228,10 +217,9 @@ static int send_capabilities(const gw_message_t *request)
     message.has_feature_total = 1;
     message.capability_revision = s_cmd.capability_revision;
     message.has_capability_revision = 1;
-    if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
+    if (send_capability_message(storage, &message) != 0) {
         goto fail;
     }
-    out++;
 
     uint16_t sequence = 0;
     for (int i = 0; i < s_cmd.registry_count; i++) {
@@ -258,10 +246,9 @@ static int send_capabilities(const gw_message_t *request)
             message.step = entry->step;
             message.has_step = 1;
         }
-        if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
+        if (send_capability_message(storage, &message) != 0) {
             goto fail;
         }
-        out++;
     }
 
     for (size_t i = 0; i < device_feature_count(); i++) {
@@ -286,10 +273,9 @@ static int send_capabilities(const gw_message_t *request)
         message.has_feature_tool = 1;
         message.value_type = feature->property.value_type;
         message.has_value_type = 1;
-        if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
+        if (send_capability_message(storage, &message) != 0) {
             goto fail;
         }
-        out++;
     }
 
     init_capability_message(&message, request,
@@ -299,25 +285,21 @@ static int send_capabilities(const gw_message_t *request)
     message.feature_total = (uint16_t)feature_total;
     message.has_feature_total = 1;
     message.bool_value = 1;
-    if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
+    if (send_capability_message(storage, &message) != 0) {
         goto fail;
     }
-    out++;
 
     gw_build_ack(&message, request, request->device_id, true, 0);
-    if (encode_batch_message(&items[out], storage[out], &message) != GW_OK) {
+    if (send_capability_message(storage, &message) != 0) {
         goto fail;
     }
-    out++;
 
-    int rc = ble_peripheral_notify_batch(items, out);
-    free(storage);
-    free(items);
-    return rc;
+    ble_peripheral_notify_sequence_end();
+    return 0;
 
 fail:
-    free(storage);
-    free(items);
+    ble_peripheral_notify_sequence_abort();
+    ble_peripheral_notify_sequence_end();
     return -1;
 }
 

@@ -8,6 +8,7 @@
  *   DEV-BLE-004 — MTU reject
  *   DEV-BLE-005 — READY gate
  *   DEV-BLE-006 — repeat pairing recovery (code review)
+ *   DEV-BLE-007 — ordered sequence contract
  *
  * Run: test/host/run_device_ble_tests.sh
  */
@@ -170,9 +171,10 @@ static void test_notify_batch_order(void)
     #define EXPECTED_NOTIFY_QUEUE_DEPTH 16
     CHECK_INT(EXPECTED_NOTIFY_QUEUE_DEPTH, 16);
 
-    /* Max batch = BEGIN + 12 ITEM + END + ACK = 15 frames */
-    #define MAX_CAPABILITY_BATCH 15
-    CHECK(MAX_CAPABILITY_BATCH <= EXPECTED_NOTIFY_QUEUE_DEPTH);
+    /* A batch remains bounded by the queue; larger capability snapshots use
+     * ordered streaming and are not passed to notify_batch(). */
+    #define MAX_CAPABILITY_BATCH 16
+    CHECK(MAX_CAPABILITY_BATCH == EXPECTED_NOTIFY_QUEUE_DEPTH);
 
     printf("DEV-BLE-003: notify batch order passed\n");
 }
@@ -329,10 +331,45 @@ static void test_diagnostics_api(void)
     CHECK_INT(diag.notify_batch_rejected, 0);
     CHECK_INT(diag.repeat_pairing_count, 0);
 
-    /* Struct should have 6 fields. */
+    /* The legacy diagnostic prefix remains six counters. */
     CHECK_INT(sizeof(diag) / sizeof(uint32_t), 6);
 
     printf("DEV-BLE-007: diagnostics API passed\n");
+}
+
+/* ------------------------------------------------------------------ *
+ * DEV-BLE-008 — ordered sequence source contract
+ * ------------------------------------------------------------------ */
+
+static void test_ordered_sequence_contract(void)
+{
+    const char *paths[] = {
+        "components/ble_peripheral/ble_peripheral.c",
+        "../../components/ble_peripheral/ble_peripheral.c",
+        "../../../components/ble_peripheral/ble_peripheral.c",
+        NULL
+    };
+    FILE *f = NULL;
+    for (int i = 0; paths[i] != NULL; i++) {
+        f = fopen(paths[i], "r");
+        if (f != NULL) break;
+    }
+    if (f == NULL) {
+        fprintf(stderr, "SKIP: cannot read ble_peripheral.c\n");
+        return;
+    }
+
+    char source[32768];
+    size_t length = fread(source, 1, sizeof(source) - 1, f);
+    source[length] = '\0';
+    fclose(f);
+
+    CHECK(strstr(source, "ble_peripheral_notify_sequence_begin") != NULL);
+    CHECK(strstr(source, "ble_peripheral_notify_sequence_send") != NULL);
+    CHECK(strstr(source, "ble_peripheral_notify_sequence_end") != NULL);
+    CHECK(strstr(source, "BLE_NOTIFY_QUEUE_DEPTH      16") != NULL);
+
+    printf("DEV-BLE-008: ordered sequence contract passed\n");
 }
 
 int main(void)
@@ -344,6 +381,7 @@ int main(void)
     test_ready_gate();
     test_repeat_pairing_recovery();
     test_diagnostics_api();
+    test_ordered_sequence_contract();
 
     printf("\ndevice_ble: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

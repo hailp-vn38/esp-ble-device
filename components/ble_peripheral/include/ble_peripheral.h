@@ -20,6 +20,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "freertos/FreeRTOS.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -115,9 +117,23 @@ typedef struct {
 } ble_peripheral_notify_item_t;
 
 /* Enqueue a contiguous notification transaction. Other producers cannot
- * interleave messages in the batch. The largest supported batch is 16. */
+ * interleave messages in the batch. The largest supported batch is the
+ * notify queue depth; use the ordered sequence API for larger transactions. */
 int ble_peripheral_notify_batch(const ble_peripheral_notify_item_t *items,
                                 size_t count);
+
+/* Ordered notification sequence for transactions larger than the queue.
+ * begin() acquires the submission mutex. Each send() validates the current
+ * READY/CCCD/MTU state, waits for one queue slot for at most timeout, and
+ * copies the frame into the queue. end() releases the mutex. Producers using
+ * ble_peripheral_notify() or notify_batch() cannot interleave frames while a
+ * sequence is active. */
+int ble_peripheral_notify_sequence_begin(void);
+int ble_peripheral_notify_sequence_send(const uint8_t *data,
+                                        size_t len,
+                                        TickType_t timeout);
+void ble_peripheral_notify_sequence_abort(void);
+void ble_peripheral_notify_sequence_end(void);
 
 /* ------------------------------------------------------------------ *
  * Status queries
@@ -145,6 +161,11 @@ typedef struct {
     uint32_t notify_dropped;
     uint32_t notify_batch_rejected;
     uint32_t repeat_pairing_count;
+    uint32_t notify_sequence_started;
+    uint32_t notify_sequence_completed;
+    uint32_t notify_sequence_aborted;
+    uint32_t notify_sequence_timeout;
+    uint32_t notify_oversize;
 } ble_peripheral_diag_t;
 
 /* Get current diagnostic counters. */
