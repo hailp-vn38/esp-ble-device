@@ -1,0 +1,14 @@
+{
+  "name": "demo_device",
+  "model": "esp32s3-demo",
+  "target": "esp32s3",
+  "chip": { "name": "ESP32-S3", "cpu": "Dual-Core Xtensa LX7 @ 240MHz", "flash": "4MB", "ble": "5.0", "usb": "Type-C" },
+  "hardware_version": "1.0",
+  "firmware_version": "0.3.0",
+  "protocol_version": 4,
+  "capability_revision": 1,
+  "pins": {
+    "relay": 4, "plug": 5, "fan_pwm": 6, "contact": 7,
+    "light": 8, "button": 9, "dimmer_pwm": 10
+  }
+}
