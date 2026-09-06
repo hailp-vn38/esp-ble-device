@@ -36,6 +36,8 @@ esp-ble-device/
 
 # Build reference_device
 ./tools/build.sh reference_device build
+./tools/build.sh demo_device build
+
 
 # Build + flash
 ./tools/build.sh reference_device flash
@@ -47,7 +49,7 @@ esp-ble-device/
 ./tools/build.sh reference_device clean
 
 # Use specific serial port
-./tools/build.sh reference_device flash /dev/tty.usbmodem1101
+./tools/build.sh demo_device flash /dev/tty.usbmodem2101
 
 # Use different ESP-IDF version
 IDF_VERSION=6.1-rc1 ./tools/build.sh reference_device flash

@@ -20,14 +20,15 @@
     }
   },
   "idf.openOcdConfigs": [
-    "board/esp32-wrover-kit-3.3v.cfg"
+    "board/esp32s3-builtin.cfg"
   ],
-  "idf.port": "detect",
+  "idf.port": "/dev/tty.usbmodem2101",
   "idf.currentSetup": "/Users/lamphuchai/.espressif/v6.1-rc1/esp-idf",
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32"
+    "IDF_TARGET": "esp32",
+    "OPENOCD_USB_ADAPTER_LOCATION": "2-1"
   },
-  "clangd.path": "/Users/lamphuchai/.espressif/tools/esp-clang/esp-18.1.2_20240912/esp-clang/bin/clangd",
+  "clangd.path": "/Users/lamphuchai/.espressif/tools/esp-clangd/esp-21.1.3_20260408/esp-clangd/bin/clangd",
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
