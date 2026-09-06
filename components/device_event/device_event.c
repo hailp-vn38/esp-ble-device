@@ -37,6 +37,7 @@ typedef struct {
     char feature_id[GW_FEATURE_ID_LEN];
     uint8_t property_id;
     bool structured_feature;
+    bool structured_feature_int;
     device_event_class_t event_class;
     int int_value;
     bool bool_value;
@@ -109,9 +110,15 @@ static void event_worker(void *arg)
         /* Build and encode event message. */
         gw_message_t msg;
         if (slot.structured_feature) {
-            gw_build_feature_event_bool(&msg, s_event.device_id,
-                                        slot.feature_id, slot.property_id,
-                                        slot.bool_value);
+            if (slot.structured_feature_int) {
+                gw_build_feature_event_int(&msg, s_event.device_id,
+                                           slot.feature_id, slot.property_id,
+                                           slot.int_value);
+            } else {
+                gw_build_feature_event_bool(&msg, s_event.device_id,
+                                            slot.feature_id, slot.property_id,
+                                            slot.bool_value);
+            }
         } else {
             gw_build_event(&msg, s_event.device_id, slot.event_name,
                            slot.int_value, slot.bool_value);
@@ -230,6 +237,31 @@ int device_event_publish_feature_bool(const char *feature_id,
     strlcpy(slot.feature_id, feature_id, sizeof(slot.feature_id));
     if (xQueueSend(s_event.queue, &slot, 0) != pdTRUE) {
         ESP_LOGW(TAG, "feature event queue full: %s", feature_id);
+        return -1;
+    }
+    return 0;
+}
+
+int device_event_publish_feature_int(const char *feature_id,
+                                     uint8_t property_id, int32_t value)
+{
+    if (feature_id == NULL || feature_id[0] == '\0' ||
+        strnlen(feature_id, GW_FEATURE_ID_LEN) >= GW_FEATURE_ID_LEN ||
+        s_event.queue == NULL) return -1;
+
+    event_slot_t slot = {
+        .property_id = property_id,
+        .structured_feature = true,
+        .structured_feature_int = true,
+        .event_class = DEVICE_EVENT_STATE,
+        .int_value = value,
+        .occupied = true,
+    };
+    strlcpy(slot.event_name, GW_EVENT_FEATURE_STATE,
+            sizeof(slot.event_name));
+    strlcpy(slot.feature_id, feature_id, sizeof(slot.feature_id));
+    if (xQueueSend(s_event.queue, &slot, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "feature INT event queue full: %s", feature_id);
         return -1;
     }
     return 0;

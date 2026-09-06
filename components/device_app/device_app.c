@@ -123,7 +123,11 @@ device_app_result_t device_app_start(void)
     }
 
     /* Freeze command registry and semantic snapshot. */
-    device_command_freeze();
+    rc = device_command_freeze();
+    if (rc != 0) {
+        ESP_LOGE(TAG, "command/feature binding validation failed");
+        return DEVICE_APP_ERR_COMMAND;
+    }
 
     /* Step 12: device_event init. */
     rc = device_event_init(ble_notify_bridge, s_app.device_id);

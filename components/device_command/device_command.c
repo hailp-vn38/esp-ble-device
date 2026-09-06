@@ -191,6 +191,50 @@ static int send_capability_message(uint8_t storage[GW_MSG_MAX_LEN],
         storage, (size_t)encoded, pdMS_TO_TICKS(1000));
 }
 
+static int validate_feature_bindings(void)
+{
+    for (size_t i = 0; i < device_feature_count(); i++) {
+        const device_feature_descriptor_t *feature = device_feature_get(i);
+        if (feature == NULL || !feature->property.writable) continue;
+
+        cmd_entry_t *entry = find_entry(feature->write_tool);
+        if (entry == NULL || !entry->advertised ||
+            (uint8_t)entry->value_type !=
+                (uint8_t)feature->property.value_type) {
+            ESP_LOGE(TAG, "feature '%s' has invalid write tool binding '%s'",
+                     feature->feature_id, feature->write_tool);
+            return -1;
+        }
+        if (strcmp(entry->unit, feature->unit) != 0) {
+            ESP_LOGE(TAG, "feature '%s' unit '%s' mismatches tool '%s' unit '%s'",
+                     feature->feature_id, feature->unit, entry->command,
+                     entry->unit);
+            return -1;
+        }
+        if (feature->property.value_type == DEVICE_FEATURE_VALUE_INT &&
+            (entry->min_value > entry->max_value || entry->step == 0u)) {
+            ESP_LOGE(TAG, "feature '%s' has invalid numeric tool range",
+                     feature->feature_id);
+            return -1;
+        }
+
+        int bindings = 0;
+        for (size_t j = 0; j < device_feature_count(); j++) {
+            const device_feature_descriptor_t *other = device_feature_get(j);
+            if (other != NULL && other->property.writable &&
+                strcmp(other->write_tool, feature->write_tool) == 0) {
+                bindings++;
+            }
+        }
+        if (bindings > 1) {
+            ESP_LOGE(TAG, "write tool '%s' is bound to multiple features",
+                     feature->write_tool);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 /* Emits begin -> item[0..N-1] -> end -> ACK as one ordered stream. */
 static int send_capabilities(const gw_message_t *request)
 {
@@ -273,6 +317,17 @@ static int send_capabilities(const gw_message_t *request)
         message.has_feature_tool = 1;
         message.value_type = feature->property.value_type;
         message.has_value_type = 1;
+        strlcpy(message.capability_label, feature->title,
+                sizeof(message.capability_label));
+        strlcpy(message.capability_unit, feature->unit,
+                sizeof(message.capability_unit));
+        message.feature_decimals = feature->decimals;
+        message.has_feature_decimals = 1;
+        if (feature->write_tool[0] != '\0') {
+            strlcpy(message.feature_tool, feature->write_tool,
+                    sizeof(message.feature_tool));
+            message.has_feature_tool = 1;
+        }
         if (send_capability_message(storage, &message) != 0) {
             goto fail;
         }
@@ -317,14 +372,20 @@ static void send_ack(const gw_message_t *request,
      * identity). Never override with configured native ID (s_cmd.device_id). */
     gw_build_ack(&ack, request, request->device_id, response->success,
                  response->int_value);
-    if (response->has_feature_value_bool) {
-        strlcpy(ack.feature_id, response->feature_id,
+    if (response->has_feature_state) {
+        strlcpy(ack.feature_id, response->feature_state.feature_id,
                 sizeof(ack.feature_id));
         ack.has_feature_id = 1;
-        ack.property_id = response->feature_property_id;
+        ack.property_id = response->feature_state.property_id;
         ack.has_property_id = 1;
-        ack.feature_value_bool = response->feature_value_bool;
-        ack.has_feature_value_bool = 1;
+        if (response->feature_state.value.type == DEVICE_FEATURE_VALUE_BOOL) {
+            ack.feature_value_bool = response->feature_state.value.value.bool_value;
+            ack.has_feature_value_bool = 1;
+        } else if (response->feature_state.value.type ==
+                   DEVICE_FEATURE_VALUE_INT) {
+            ack.feature_value_int = response->feature_state.value.value.int_value;
+            ack.has_feature_value_int = 1;
+        }
     }
 
     uint8_t buf[GW_MSG_MAX_LEN];
@@ -377,17 +438,20 @@ static void cmd_worker(void *arg)
 
         if (strcmp(msg.command, GW_COMMAND_READ_FEATURE_STATE) == 0) {
             device_cmd_response_t response = { 0 };
-            bool value = false;
-            int read_rc = device_feature_read_bool(
-                msg.feature_id, msg.property_id, &value);
+            device_feature_value_t value;
+            int read_rc = (!msg.has_feature_id || !msg.has_property_id) ? -1 :
+                device_feature_read(msg.feature_id, msg.property_id, &value);
             response.success = (read_rc == 0);
-            response.int_value = value ? 1 : 0;
+            response.int_value = (read_rc == 0 &&
+                                  value.type == DEVICE_FEATURE_VALUE_BOOL) ?
+                                 (value.value.bool_value ? 1 : 0) :
+                                 (read_rc == 0 ? value.value.int_value : 0);
             if (read_rc == 0) {
-                response.has_feature_value_bool = true;
-                response.feature_value_bool = value;
-                response.feature_property_id = msg.property_id;
-                strlcpy(response.feature_id, msg.feature_id,
-                        sizeof(response.feature_id));
+                response.has_feature_state = true;
+                strlcpy(response.feature_state.feature_id, msg.feature_id,
+                        sizeof(response.feature_state.feature_id));
+                response.feature_state.property_id = msg.property_id;
+                response.feature_state.value = value;
             }
             send_ack(&msg, &response);
             continue;
@@ -550,6 +614,7 @@ int device_command_register_capability(
 int device_command_freeze(void)
 {
     if (s_cmd.frozen) return 0;
+    if (validate_feature_bindings() != 0) return -1;
     s_cmd.frozen = true;
 
     xTaskCreate(cmd_worker, "cmd_worker", CMD_TASK_STACK,
@@ -622,12 +687,33 @@ int device_command_response_set_feature_bool(
         return -1;
     }
 
-    response->has_feature_value_bool = true;
-    response->feature_value_bool = value;
-    response->feature_property_id = property_id;
+    response->has_feature_state = true;
+    strlcpy(response->feature_state.feature_id, feature_id,
+            sizeof(response->feature_state.feature_id));
+    response->feature_state.property_id = property_id;
+    response->feature_state.value.type = DEVICE_FEATURE_VALUE_BOOL;
+    response->feature_state.value.value.bool_value = value;
 
-    strlcpy(response->feature_id, feature_id,
-            sizeof(response->feature_id));
+    return 0;
+}
+
+int device_command_response_set_feature_int(
+    device_cmd_response_t *response,
+    const char *feature_id,
+    uint8_t property_id,
+    int32_t value)
+{
+    if (response == NULL || feature_id == NULL || feature_id[0] == '\0' ||
+        strnlen(feature_id, GW_FEATURE_ID_LEN) >= GW_FEATURE_ID_LEN) {
+        return -1;
+    }
+
+    response->has_feature_state = true;
+    strlcpy(response->feature_state.feature_id, feature_id,
+            sizeof(response->feature_state.feature_id));
+    response->feature_state.property_id = property_id;
+    response->feature_state.value.type = DEVICE_FEATURE_VALUE_INT;
+    response->feature_state.value.value.int_value = value;
 
     return 0;
 }

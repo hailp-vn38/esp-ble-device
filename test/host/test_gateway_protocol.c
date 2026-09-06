@@ -528,6 +528,10 @@ static void test_feature_v4_roundtrip(void)
     msg.has_feature_tool = 1;
     msg.value_type = 1;
     msg.has_value_type = 1;
+    strcpy(msg.capability_label, "Nhiệt độ sấy");
+    strcpy(msg.capability_unit, "°C");
+    msg.feature_decimals = 1;
+    msg.has_feature_decimals = 1;
     int encoded = gw_message_encode(&msg, buf, sizeof(buf));
     CHECK(encoded > 0);
     CHECK(gw_message_decode(buf, (size_t)encoded, &decoded) == GW_OK);
@@ -538,6 +542,10 @@ static void test_feature_v4_roundtrip(void)
     CHECK(decoded.property_id == GW_PROP_ON_OFF);
     CHECK(decoded.has_feature_tool && strcmp(decoded.feature_tool, "set_led") == 0);
 
+    CHECK(decoded.has_feature_decimals && decoded.feature_decimals == 1);
+    CHECK(strcmp(decoded.capability_label, "Nhiệt độ sấy") == 0);
+    CHECK(strcmp(decoded.capability_unit, "°C") == 0);
+
     gw_build_feature_event_bool(&msg, "esp32s3-ref", "led_main",
                                 GW_PROP_ON_OFF, true);
     encoded = gw_message_encode(&msg, buf, sizeof(buf));
@@ -546,6 +554,60 @@ static void test_feature_v4_roundtrip(void)
     CHECK(strcmp(decoded.command, GW_EVENT_FEATURE_STATE) == 0);
     CHECK(decoded.has_feature_value_bool && decoded.feature_value_bool);
     CHECK(decoded.has_feature_id && decoded.has_property_id);
+
+    gw_build_feature_event_int(&msg, "esp32s3-ref", "dryer_temperature",
+                               GW_PROP_VALUE, 655);
+    encoded = gw_message_encode(&msg, buf, sizeof(buf));
+    CHECK(encoded > 0);
+    CHECK(gw_message_decode(buf, (size_t)encoded, &decoded) == GW_OK);
+    CHECK(decoded.has_feature_value_int && decoded.feature_value_int == 655);
+    CHECK(decoded.has_feature_id &&
+          strcmp(decoded.feature_id, "dryer_temperature") == 0);
+}
+
+static void test_feature_item_budget(void)
+{
+    gw_message_t msg;
+    uint8_t buf[GW_MSG_MAX_LEN];
+    gw_message_init(&msg);
+    strcpy(msg.type, GW_MSG_TYPE_FEATURE_ITEM);
+    memset(msg.command, 'c', sizeof(msg.command) - 1);
+    msg.command[sizeof(msg.command) - 1] = '\0';
+    msg.has_device_id = 1;
+    memset(msg.device_id, 'd', sizeof(msg.device_id) - 1);
+    msg.device_id[sizeof(msg.device_id) - 1] = '\0';
+    msg.has_snapshot_id = 1;
+    msg.snapshot_id = UINT32_MAX;
+    msg.has_sequence = 1;
+    msg.sequence = UINT16_MAX;
+    msg.has_feature_id = 1;
+    memset(msg.feature_id, 'f', sizeof(msg.feature_id) - 1);
+    msg.feature_id[sizeof(msg.feature_id) - 1] = '\0';
+    msg.has_feature_type = 1;
+    msg.feature_type = GW_FEATURE_GENERIC_VALUE;
+    msg.has_feature_schema_version = 1;
+    msg.feature_schema_version = UINT16_MAX;
+    msg.has_feature_flags = 1;
+    msg.feature_flags = UINT16_MAX;
+    msg.has_property_id = 1;
+    msg.property_id = GW_PROP_VALUE;
+    msg.has_value_type = 1;
+    msg.value_type = 2;
+    msg.has_capability_flags = 1;
+    msg.capability_flags = UINT8_MAX;
+    memset(msg.capability_label, 'l', sizeof(msg.capability_label) - 1);
+    msg.capability_label[sizeof(msg.capability_label) - 1] = '\0';
+    memset(msg.capability_unit, 'u', sizeof(msg.capability_unit) - 1);
+    msg.capability_unit[sizeof(msg.capability_unit) - 1] = '\0';
+    msg.has_feature_tool = 1;
+    memset(msg.feature_tool, 't', sizeof(msg.feature_tool) - 1);
+    msg.feature_tool[sizeof(msg.feature_tool) - 1] = '\0';
+    msg.has_feature_decimals = 1;
+    msg.feature_decimals = 3;
+
+    int encoded = gw_message_encode(&msg, buf, sizeof(buf));
+    CHECK(encoded > 0);
+    CHECK(encoded <= 240);
 }
 
 int main(void)
@@ -558,6 +620,7 @@ int main(void)
     test_string_limits();
     test_capability_roundtrip();
     test_feature_v4_roundtrip();
+    test_feature_item_budget();
 
     printf("gateway_protocol: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

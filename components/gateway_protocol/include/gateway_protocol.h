@@ -88,11 +88,13 @@ enum {
     GW_KEY_FEATURE_VALUE_INT = 28,
     GW_KEY_FEATURE_TOOL = 29,
     GW_KEY_FEATURE_TOTAL = 30,
+    GW_KEY_FEATURE_DECIMALS = 31,
 };
 
 typedef enum {
     GW_FEATURE_NONE = 0,
     GW_FEATURE_GENERIC_RELAY = 1,
+    GW_FEATURE_GENERIC_VALUE = 2,
     GW_FEATURE_ON_OFF_PLUGIN_UNIT = 10,
     GW_FEATURE_ON_OFF_LIGHT = 11,
     GW_FEATURE_DIMMABLE_LIGHT = 12,
@@ -111,6 +113,7 @@ typedef enum {
     GW_PROP_TEMPERATURE = 5,
     GW_PROP_HUMIDITY = 6,
     GW_PROP_CONTACT = 7,
+    GW_PROP_VALUE = 8,
 } gw_feature_property_t;
 
 /* ------------------------------------------------------------------ *
@@ -187,6 +190,8 @@ typedef struct {
     int has_feature_tool;
     uint16_t feature_total;
     int has_feature_total;
+    uint8_t feature_decimals;
+    int has_feature_decimals;
 } gw_message_t;
 
 /* Zero-init a message; TX then defaults to emitting protocol v4. */
@@ -234,6 +239,9 @@ void gw_build_event(gw_message_t *event, const char *device_id,
 void gw_build_feature_event_bool(gw_message_t *event, const char *device_id,
                                  const char *feature_id, uint8_t property_id,
                                  bool value);
+void gw_build_feature_event_int(gw_message_t *event, const char *device_id,
+                                const char *feature_id, uint8_t property_id,
+                                int32_t value);
 
 /* True if msg satisfies mandatory Gateway-side rules for its type
  * (ACK: non-empty device_id/command, request_id >= 1;

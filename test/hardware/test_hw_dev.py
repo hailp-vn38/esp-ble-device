@@ -4,6 +4,7 @@ HW-DEV Test Harness — ESP-BLE Device Hardware Verification (Spec v1.3 §27)
 
 Tests HW-DEV-001 through HW-DEV-011 using bleak (Python BLE) against the
 reference device flashed on /dev/cu.usbmodem2101 (or CLI --port override).
+The wire contract is ESP-GATT Protocol v4.
 
 Usage:
   python3 test_hw_dev.py                          # default port
@@ -56,6 +57,16 @@ K_STEP             = 18
 K_CAPABILITY_LABEL = 19
 K_CAPABILITY_UNIT  = 20
 K_CAPABILITY_REV   = 21
+K_FEATURE_ID       = 22
+K_FEATURE_TYPE     = 23
+K_FEATURE_SCHEMA   = 24
+K_FEATURE_FLAGS    = 25
+K_PROPERTY_ID      = 26
+K_FEATURE_VALUE_BOOL = 27
+K_FEATURE_VALUE_INT  = 28
+K_FEATURE_TOOL     = 29
+K_FEATURE_TOTAL    = 30
+K_FEATURE_DECIMALS = 31
 
 # ── Value types ───────────────────────────────────────────────────────────────
 
@@ -79,10 +90,11 @@ def build_msg(*, msg_type: str, command: str = "", int_value: int = 0,
               snapshot_id: int = 0, sequence: int = 0, total: int = 0,
               capability_rev: int = 0, value_type: int = 0,
               capability_flags: int = 0, label: str = "", unit: str = "",
-              min_value: int = 0, max_value: int = 0, step: int = 0) -> bytes:
-    """Build a CBOR-encoded BLE message per ESP-GATT Protocol v3."""
+              min_value: int = 0, max_value: int = 0, step: int = 0,
+              feature_id: str = "", property_id: int = 0) -> bytes:
+    """Build a CBOR-encoded BLE message per ESP-GATT Protocol v4."""
     m: dict[int, Any] = {
-        K_PROTOCOL_VERSION: 3,
+        K_PROTOCOL_VERSION: 4,
         K_TYPE: msg_type,
     }
     if command:
@@ -108,6 +120,10 @@ def build_msg(*, msg_type: str, command: str = "", int_value: int = 0,
             m[K_MIN_VALUE] = min_value
             m[K_MAX_VALUE] = max_value
             m[K_STEP] = step
+    if feature_id:
+        m[K_FEATURE_ID] = feature_id
+    if property_id:
+        m[K_PROPERTY_ID] = property_id
     if total:
         m[K_TOTAL] = total
     if capability_rev:
@@ -283,7 +299,7 @@ async def test_003_capability_exchange(ble: BLEConnection) -> TestResult:
 
     types_seen = [msg_type(m) for m in msgs]
     expected_seq = ["capabilities_begin", "capability_item", "capability_item",
-                    "capabilities_end", "device_ack"]
+                    "feature_item", "capabilities_end", "device_ack"]
 
     if types_seen == expected_seq:
         # Verify device_id = lamp-1 on each message
@@ -293,6 +309,19 @@ async def test_003_capability_exchange(ble: BLEConnection) -> TestResult:
         snap = msg_field(msgs[0], K_SNAPSHOT_ID)
         snap_consistent = all(msg_field(m, K_SNAPSHOT_ID) == snap for m in msgs[:4])
         if all_lamp1 and snap_consistent:
+            feature = msgs[3]
+            metadata_ok = (
+                msg_field(feature, K_FEATURE_ID) == "led_main" and
+                msg_field(feature, K_FEATURE_TYPE) == 11 and
+                msg_field(feature, K_PROPERTY_ID) == 1 and
+                msg_field(feature, K_VALUE_TYPE) == VT_BOOL and
+                msg_field(feature, K_CAPABILITY_LABEL) == "Đèn" and
+                msg_field(feature, K_FEATURE_DECIMALS) == 0 and
+                msg_field(feature, K_FEATURE_TOOL) == "set_led"
+            )
+            if not metadata_ok:
+                return TestResult("HW-DEV-003", "Initial capability exchange", False,
+                                  f"feature metadata mismatch: {feature}")
             total = msg_field(msgs[0], K_TOTAL)
             return TestResult("HW-DEV-003", "Initial capability exchange", True,
                               f"sequence={types_seen}, device_id={ids[0]}, "
@@ -325,7 +354,10 @@ async def test_004_set_led(ble: BLEConnection) -> TestResult:
         state in (0, 1) and
         echo_rid == rid and
         echo_cmd == "set_led" and
-        echo_did == GATEWAY_ID
+        echo_did == GATEWAY_ID and
+        msg_field(ack, K_FEATURE_ID) == "led_main" and
+        msg_field(ack, K_PROPERTY_ID) == 1 and
+        msg_field(ack, K_FEATURE_VALUE_BOOL) is True
     )
     if checks:
         return TestResult("HW-DEV-004", "set_led", True,
@@ -354,7 +386,10 @@ async def test_005_get_state(ble: BLEConnection) -> TestResult:
         state in (0, 1) and
         echo_rid == rid and
         echo_cmd == "get_state" and
-        echo_did == GATEWAY_ID
+        echo_did == GATEWAY_ID and
+        msg_field(ack, K_FEATURE_ID) == "led_main" and
+        msg_field(ack, K_PROPERTY_ID) == 1 and
+        msg_field(ack, K_FEATURE_VALUE_BOOL) is (state == 1)
     )
     if checks:
         return TestResult("HW-DEV-005", "get_state", True,

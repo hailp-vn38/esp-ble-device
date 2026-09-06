@@ -71,6 +71,8 @@ int device_event_publish_state(const char *event_name, int value);
 /* Publish a protocol-v4 structured boolean feature state event. */
 int device_event_publish_feature_bool(const char *feature_id,
                                       uint8_t property_id, bool value);
+int device_event_publish_feature_int(const char *feature_id,
+                                     uint8_t property_id, int32_t value);
 
 /*
  * Convenience: publish a telemetry event.

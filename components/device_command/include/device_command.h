@@ -47,6 +47,7 @@
 #include <stdint.h>
 
 #include "gateway_protocol.h"
+#include "device_feature.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -65,13 +66,17 @@ typedef enum {
 } device_cmd_result_t;
 
 typedef struct {
+    char feature_id[GW_FEATURE_ID_LEN];
+    uint8_t property_id;
+    device_feature_value_t value;
+} device_cmd_feature_state_t;
+
+typedef struct {
     bool success;
     int int_value;
     bool long_running;
-    bool has_feature_value_bool;
-    bool feature_value_bool;
-    uint8_t feature_property_id;
-    char feature_id[GW_FEATURE_ID_LEN];
+    bool has_feature_state;
+    device_cmd_feature_state_t feature_state;
 } device_cmd_response_t;
 
 typedef device_cmd_result_t (*device_cmd_handler_t)(
@@ -148,6 +153,11 @@ int device_command_response_set_feature_bool(
     const char *feature_id,
     uint8_t property_id,
     bool value);
+int device_command_response_set_feature_int(
+    device_cmd_response_t *response,
+    const char *feature_id,
+    uint8_t property_id,
+    int32_t value);
 
 #ifdef __cplusplus
 }

@@ -248,13 +248,19 @@ static int ref_register_events(void)
 
 static int ref_register_features(void)
 {
-    const device_feature_on_off_light_config_t config = {
+    const device_feature_config_t config = {
         .feature_id = "led_main",
-        .set_command = "set_led",
-        .read_on_off = ref_led_read_state,
+        .title = "Đèn",
+        .unit = "",
+        .type = GW_FEATURE_ON_OFF_LIGHT,
+        .schema_version = 2,
+        .property_id = GW_PROP_ON_OFF,
+        .value_type = DEVICE_FEATURE_VALUE_BOOL,
+        .write_tool = "set_led",
+        .reader = {.read_bool = ref_led_read_state},
         .context = NULL,
     };
-    return device_feature_register_on_off_light(&config);
+    return device_feature_register(&config);
 }
 
 /* ------------------------------------------------------------------ *

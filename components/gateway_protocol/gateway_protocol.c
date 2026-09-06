@@ -221,6 +221,7 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
     if (msg->has_feature_value_int) pair_count++;
     if (msg->has_feature_tool) pair_count++;
     if (msg->has_feature_total) pair_count++;
+    if (msg->has_feature_decimals) pair_count++;
 
     gw_writer_t w = { out_buf, out_cap, 0u };
     int rc = gw_put_head(&w, 5u, pair_count);
@@ -347,6 +348,10 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
     if (rc == GW_OK && msg->has_feature_total) {
         rc = gw_put_uint(&w, GW_KEY_FEATURE_TOTAL);
         if (rc == GW_OK) rc = gw_put_uint(&w, msg->feature_total);
+    }
+    if (rc == GW_OK && msg->has_feature_decimals) {
+        rc = gw_put_uint(&w, GW_KEY_FEATURE_DECIMALS);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->feature_decimals);
     }
 
 done:
@@ -846,6 +851,16 @@ int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
             break;
         }
 
+        case GW_KEY_FEATURE_DECIMALS: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT8_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->feature_decimals = (uint8_t)value;
+                out_msg->has_feature_decimals = 1;
+            }
+            break;
+        }
+
         default:
             rc = gw_skip_item(&r, 0);
             break;
@@ -945,6 +960,20 @@ void gw_build_feature_event_bool(gw_message_t *event, const char *device_id,
     event->has_property_id = 1;
     event->feature_value_bool = value;
     event->has_feature_value_bool = 1;
+}
+
+void gw_build_feature_event_int(gw_message_t *event, const char *device_id,
+                                const char *feature_id, uint8_t property_id,
+                                int32_t value)
+{
+    gw_build_event(event, device_id, GW_EVENT_FEATURE_STATE, value, false);
+    if (feature_id == NULL || feature_id[0] == '\0') return;
+    gw_copy_str(event->feature_id, sizeof(event->feature_id), feature_id);
+    event->has_feature_id = 1;
+    event->property_id = property_id;
+    event->has_property_id = 1;
+    event->feature_value_int = value;
+    event->has_feature_value_int = 1;
 }
 
 static bool gw_non_empty(const char *value, size_t capacity)
