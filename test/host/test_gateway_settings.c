@@ -244,6 +244,42 @@ static void test_settings_encode_values_end(void)
  * Transaction encode tests
  * ------------------------------------------------------------------ */
 
+static void test_settings_tx_command_strings(void)
+{
+    uint8_t buf[GW_MSG_MAX_LEN];
+    gw_message_t decoded;
+    int encoded;
+
+    encoded = gw_settings_encode_tx_begin(buf, sizeof(buf), 1, 1, 1);
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK(strcmp(decoded.command, GW_MSG_TYPE_SETTINGS_TX_BEGIN) == 0);
+
+    bool bool_value = true;
+    encoded = gw_settings_encode_tx_set(buf, sizeof(buf), 1, "enabled",
+                                        GW_SETTING_TYPE_BOOL, &bool_value, 1);
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK(strcmp(decoded.command, GW_MSG_TYPE_SETTINGS_TX_SET) == 0);
+    CHECK(decoded.has_setting_value == 1);
+    CHECK(decoded.setting_value.bool_val == true);
+
+    encoded = gw_settings_encode_tx_commit(buf, sizeof(buf), 1, 1);
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK(strcmp(decoded.command, GW_MSG_TYPE_SETTINGS_TX_COMMIT) == 0);
+
+    encoded = gw_settings_encode_tx_abort(buf, sizeof(buf), 1, 1);
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK(strcmp(decoded.command, GW_MSG_TYPE_SETTINGS_TX_ABORT) == 0);
+
+    encoded = gw_settings_encode_commit_confirm(buf, sizeof(buf), 1, 2, 1);
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK(strcmp(decoded.command, GW_MSG_TYPE_SETTINGS_COMMIT_CONFIRM) == 0);
+}
+
 static void test_settings_encode_tx_begin(void)
 {
     uint8_t buf[GW_MSG_MAX_LEN];
@@ -527,6 +563,7 @@ int main(void)
     test_settings_encode_value_string();
     test_settings_encode_value_enum();
     test_settings_encode_values_end();
+    test_settings_tx_command_strings();
     test_settings_encode_tx_begin();
     test_settings_encode_tx_set();
     test_settings_encode_tx_commit();

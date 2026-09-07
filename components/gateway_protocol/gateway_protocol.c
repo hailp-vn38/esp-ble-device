@@ -222,6 +222,8 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
     if (msg->has_feature_tool) pair_count++;
     if (msg->has_feature_total) pair_count++;
     if (msg->has_feature_decimals) pair_count++;
+    if (msg->has_settings_supported) pair_count++;
+    if (msg->has_settings_schema_revision) pair_count++;
 
     gw_writer_t w = { out_buf, out_cap, 0u };
     int rc = gw_put_head(&w, 5u, pair_count);
@@ -352,6 +354,14 @@ int gw_message_encode(const gw_message_t *msg, uint8_t *out_buf, size_t out_cap)
     if (rc == GW_OK && msg->has_feature_decimals) {
         rc = gw_put_uint(&w, GW_KEY_FEATURE_DECIMALS);
         if (rc == GW_OK) rc = gw_put_uint(&w, msg->feature_decimals);
+    }
+    if (rc == GW_OK && msg->has_settings_supported) {
+        rc = gw_put_uint(&w, GW_KEY_SETTINGS_SUPPORTED);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->settings_supported ? 1u : 0u);
+    }
+    if (rc == GW_OK && msg->has_settings_schema_revision) {
+        rc = gw_put_uint(&w, GW_KEY_SETTINGS_SCHEMA_REVISION);
+        if (rc == GW_OK) rc = gw_put_uint(&w, msg->settings_schema_revision);
     }
 
 done:
@@ -558,6 +568,43 @@ static int gw_get_bool(gw_reader_t *r, bool *out)
     return GW_OK;
 }
 
+static int gw_decode_setting_value(const uint8_t *data, size_t len,
+                                   uint8_t type, gw_message_t *out_msg)
+{
+    if (data == NULL || out_msg == NULL) return GW_ERR_INVALID_ARG;
+
+    gw_reader_t value_reader = { data, len, 0u };
+    int rc;
+    switch (type) {
+    case GW_SETTING_TYPE_BOOL:
+        rc = gw_get_bool(&value_reader, &out_msg->setting_value.bool_val);
+        break;
+    case GW_SETTING_TYPE_INT: {
+        int value = 0;
+        rc = gw_get_int_value(&value_reader, &value);
+        if (rc == GW_OK) out_msg->setting_value.int_val = (int32_t)value;
+        break;
+    }
+    case GW_SETTING_TYPE_STRING:
+        rc = gw_get_text(&value_reader, out_msg->setting_value.str_val,
+                         sizeof(out_msg->setting_value.str_val), true);
+        break;
+    case GW_SETTING_TYPE_ENUM: {
+        uint64_t value = 0;
+        rc = gw_get_uint_bounded(&value_reader, UINT8_MAX, &value);
+        if (rc == GW_OK) out_msg->setting_value.enum_val = (uint8_t)value;
+        break;
+    }
+    default:
+        return GW_ERR_DECODE;
+    }
+    if (rc != GW_OK || value_reader.off != len) return GW_ERR_DECODE;
+
+    out_msg->setting_value_type = type;
+    out_msg->has_setting_value = 1;
+    return GW_OK;
+}
+
 int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
 {
     if (buf == NULL || out_msg == NULL || len == 0u || len > GW_MSG_MAX_LEN) {
@@ -589,6 +636,9 @@ int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
     int int_value = 0;
     bool bool_value = false;
     uint64_t request_id = 0;
+    uint8_t raw_setting_value[GW_MSG_MAX_LEN];
+    size_t raw_setting_value_len = 0u;
+    bool has_raw_setting_value = false;
 
     while (pair_count-- > 0ull && rc == GW_OK) {
         uint64_t key;
@@ -983,6 +1033,21 @@ int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
             break;
         }
 
+        case GW_KEY_SETTINGS_VALUE: {
+            size_t value_start = r.off;
+            rc = gw_skip_item(&r, 0);
+            if (rc != GW_OK) break;
+            raw_setting_value_len = r.off - value_start;
+            if (raw_setting_value_len > sizeof(raw_setting_value)) {
+                rc = GW_ERR_DECODE;
+                break;
+            }
+            memcpy(raw_setting_value, &r.data[value_start],
+                   raw_setting_value_len);
+            has_raw_setting_value = true;
+            break;
+        }
+
         case GW_KEY_SETTINGS_SEQUENCE: {
             uint64_t value = 0;
             rc = gw_get_uint_bounded(&r, UINT16_MAX, &value);
@@ -1012,6 +1077,12 @@ int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
         return GW_ERR_UNSUPPORTED_VERSION;
     }
     if (has_ble_addr && !has_ble_addr_type) return GW_ERR_DECODE;
+    if (has_raw_setting_value) {
+        if (!out_msg->has_setting_type) return GW_ERR_DECODE;
+        rc = gw_decode_setting_value(raw_setting_value, raw_setting_value_len,
+                                     out_msg->setting_type, out_msg);
+        if (rc != GW_OK) return rc;
+    }
 
     out_msg->protocol_version = (uint8_t)version;
     out_msg->int_value = int_value;

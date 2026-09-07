@@ -488,7 +488,8 @@ static void cmd_worker(void *arg)
             strcmp(msg.command, GW_MSG_TYPE_SETTINGS_TX_BEGIN) == 0 ||
             strcmp(msg.command, GW_MSG_TYPE_SETTINGS_TX_SET) == 0 ||
             strcmp(msg.command, GW_MSG_TYPE_SETTINGS_TX_COMMIT) == 0 ||
-            strcmp(msg.command, GW_MSG_TYPE_SETTINGS_TX_ABORT) == 0) {
+            strcmp(msg.command, GW_MSG_TYPE_SETTINGS_TX_ABORT) == 0 ||
+            strcmp(msg.command, GW_MSG_TYPE_SETTINGS_COMMIT_CONFIRM) == 0) {
             handle_settings_command(&msg);
             continue;
         }
@@ -666,7 +667,7 @@ static int handle_describe_settings(const gw_message_t *msg)
                                       desc->id, desc->title,
                                       desc->group ? desc->group : "",
                                       desc->unit ? desc->unit : "",
-                                      (uint8_t)desc->type, desc->flags,
+                                      settings_type_to_wire(desc->type), desc->flags,
                                       desc->max_length,
                                       desc->min_value, desc->max_value,
                                       (uint32_t)desc->step);
@@ -744,7 +745,7 @@ static int handle_read_settings(const gw_message_t *msg)
             }
             bool configured = secret.configured;
             enc = gw_settings_encode_value(storage, sizeof(storage),
-                                           i, desc->id, settings_type_to_wire(desc->type),
+                                           i, desc->id, GW_SETTING_TYPE_BOOL,
                                            &configured, request_id);
         } else {
             /* Read value into stack buffer */
@@ -758,7 +759,7 @@ static int handle_read_settings(const gw_message_t *msg)
                 goto fail;
             }
             enc = gw_settings_encode_value(storage, sizeof(storage),
-                                           i, desc->id, (uint8_t)desc->type,
+                                           i, desc->id, settings_type_to_wire(desc->type),
                                            value_buf, request_id);
         }
         if (send_settings_frame(storage, enc) != 0) goto fail;

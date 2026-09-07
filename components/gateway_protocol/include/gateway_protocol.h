@@ -40,6 +40,7 @@ extern "C" {
 #define GW_MSG_CAP_LABEL_LEN      32u
 #define GW_MSG_CAP_UNIT_LEN       12u
 #define GW_FEATURE_ID_LEN          32u
+#define GW_SETTINGS_VALUE_STR_LEN  64u
 
 /* Known wire message types. Device RX handles only device_command;
  * Device TX emits device_ack / device_event. */
@@ -285,6 +286,14 @@ typedef struct {
     int has_settings_expected_revision;
     uint32_t settings_new_revision;
     int has_settings_new_revision;
+    uint8_t setting_value_type;
+    int has_setting_value;
+    union {
+        bool bool_val;
+        int32_t int_val;
+        uint8_t enum_val;
+        char str_val[GW_SETTINGS_VALUE_STR_LEN];
+    } setting_value;
 } gw_message_t;
 
 /* Zero-init a message; TX then defaults to emitting protocol v4. */

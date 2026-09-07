@@ -9,6 +9,7 @@ cc -std=c11 -Wall -Wextra -Werror -O2 \
    -DGW_HOST_TEST \
    -I"$DIR/../../components/gateway_protocol/include" \
    "$DIR/../../components/gateway_protocol/gateway_protocol.c" \
+   "$DIR/../../components/gateway_protocol/gateway_settings.c" \
    "$DIR/test_gateway_protocol.c" \
    -o "$OUT/test_gateway_protocol"
 

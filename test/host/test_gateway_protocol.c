@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "gateway_protocol.h"
+#include "gateway_settings.h"
 
 static int g_checks = 0;
 static int g_failures = 0;
@@ -383,6 +384,109 @@ static void test_decode_rejections(void)
     CHECK_INT(gw_message_decode(NULL, 8, &decoded), GW_ERR_INVALID_ARG);
 }
 
+static void test_settings_capability_fields(void)
+{
+    gw_message_t msg, decoded;
+    uint8_t buf[GW_MSG_MAX_LEN];
+
+    gw_message_init(&msg);
+    strcpy(msg.type, GW_MSG_TYPE_CAPABILITIES_BEGIN);
+    strcpy(msg.command, GW_COMMAND_DESCRIBE_CAPABILITIES);
+    msg.settings_supported = 1;
+    msg.has_settings_supported = 1;
+    msg.settings_schema_revision = 7;
+    msg.has_settings_schema_revision = 1;
+
+    int encoded = gw_message_encode(&msg, buf, sizeof(buf));
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK(decoded.has_settings_supported == 1);
+    CHECK(decoded.settings_supported == 1);
+    CHECK(decoded.has_settings_schema_revision == 1);
+    CHECK_INT(decoded.settings_schema_revision, 7);
+
+    msg.settings_supported = 0;
+    msg.has_settings_schema_revision = 0;
+    encoded = gw_message_encode(&msg, buf, sizeof(buf));
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK(decoded.has_settings_supported == 1);
+    CHECK(decoded.settings_supported == 0);
+    CHECK(decoded.has_settings_schema_revision == 0);
+}
+
+static void test_settings_value_decode(void)
+{
+    gw_message_t msg, decoded;
+    uint8_t buf[GW_MSG_MAX_LEN];
+
+    gw_message_init(&msg);
+    strcpy(msg.type, GW_MSG_TYPE_DEVICE_COMMAND);
+    strcpy(msg.command, GW_MSG_TYPE_SETTINGS_TX_SET);
+    msg.setting_type = GW_SETTING_TYPE_BOOL;
+    msg.has_setting_type = 1;
+    msg.setting_value.bool_val = true;
+    msg.has_setting_value = 1;
+    msg.setting_value_type = GW_SETTING_TYPE_BOOL;
+    int encoded = gw_message_encode(&msg, buf, sizeof(buf));
+    CHECK(encoded > 0);
+
+    /* Generic encoder does not emit key 40; decode a specialized TX_SET
+     * frame for each typed value instead. */
+    bool bool_value = true;
+    encoded = gw_settings_encode_tx_set(buf, sizeof(buf), 1, "enabled",
+                                         GW_SETTING_TYPE_BOOL, &bool_value, 1);
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK(decoded.has_setting_value == 1);
+    CHECK(decoded.setting_value_type == GW_SETTING_TYPE_BOOL);
+    CHECK(decoded.setting_value.bool_val == true);
+
+    int32_t int_value = -42;
+    encoded = gw_settings_encode_tx_set(buf, sizeof(buf), 1, "count",
+                                         GW_SETTING_TYPE_INT, &int_value, 1);
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK(decoded.has_setting_value == 1);
+    CHECK(decoded.setting_value_type == GW_SETTING_TYPE_INT);
+    CHECK_INT(decoded.setting_value.int_val, -42);
+
+    const char *string_value = "hello";
+    encoded = gw_settings_encode_tx_set(buf, sizeof(buf), 1, "name",
+                                         GW_SETTING_TYPE_STRING, string_value, 1);
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK(decoded.has_setting_value == 1);
+    CHECK(decoded.setting_value_type == GW_SETTING_TYPE_STRING);
+    CHECK(strcmp(decoded.setting_value.str_val, "hello") == 0);
+
+    uint8_t enum_value = 3;
+    encoded = gw_settings_encode_tx_set(buf, sizeof(buf), 1, "mode",
+                                         GW_SETTING_TYPE_ENUM, &enum_value, 1);
+    CHECK(encoded > 0);
+    CHECK_INT(gw_message_decode(buf, (size_t)encoded, &decoded), GW_OK);
+    CHECK(decoded.has_setting_value == 1);
+    CHECK(decoded.setting_value_type == GW_SETTING_TYPE_ENUM);
+    CHECK_INT(decoded.setting_value.enum_val, 3);
+
+    /* key 40 precedes key 38: decoder must defer typed value parsing. */
+    static const uint8_t VALUE_BEFORE_TYPE[] = {
+        0xA7,
+        0x00, 0x04,
+        0x01, 0x6E, 'd','e','v','i','c','e','_','c','o','m','m','a','n','d',
+        0x03, 0x6F, 's','e','t','t','i','n','g','s','_','t','x','_','s','e','t',
+        0x04, 0x00,
+        0x05, 0xF4,
+        0x18, 0x28, 0xF5,
+        0x18, 0x26, 0x01,
+    };
+    CHECK_INT(gw_message_decode(VALUE_BEFORE_TYPE,
+                                sizeof(VALUE_BEFORE_TYPE), &decoded), GW_OK);
+    CHECK(decoded.has_setting_value == 1);
+    CHECK(decoded.setting_value_type == GW_SETTING_TYPE_BOOL);
+    CHECK(decoded.setting_value.bool_val == true);
+}
+
 static void test_capability_roundtrip(void)
 {
     gw_message_t item, decoded;
@@ -618,6 +722,8 @@ int main(void)
     test_decode_rejections();
     test_encode_validation();
     test_string_limits();
+    test_settings_capability_fields();
+    test_settings_value_decode();
     test_capability_roundtrip();
     test_feature_v4_roundtrip();
     test_feature_item_budget();

@@ -437,7 +437,8 @@ int gw_settings_encode_tx_begin(uint8_t *out_buf, size_t out_cap,
 
     rc = gw_put_uint(&w, GW_KEY_PROTOCOL_VERSION);
     if (rc == GW_OK) rc = gw_put_uint(&w, GW_PROTOCOL_VERSION);
-    if (rc == GW_OK) rc = gw_settings_put_type_command(&w, GW_COMMAND_SET_SETTINGS);
+    if (rc == GW_OK) rc = gw_settings_put_type_command(
+        &w, GW_MSG_TYPE_SETTINGS_TX_BEGIN);
     if (rc == GW_OK) {
         rc = gw_put_uint(&w, GW_KEY_SETTINGS_TRANSACTION_ID);
         if (rc == GW_OK) rc = gw_put_uint(&w, transaction_id);
@@ -469,7 +470,8 @@ int gw_settings_encode_tx_set(uint8_t *out_buf, size_t out_cap,
 
     rc = gw_put_uint(&w, GW_KEY_PROTOCOL_VERSION);
     if (rc == GW_OK) rc = gw_put_uint(&w, GW_PROTOCOL_VERSION);
-    if (rc == GW_OK) rc = gw_settings_put_type_command(&w, GW_COMMAND_SET_SETTINGS);
+    if (rc == GW_OK) rc = gw_settings_put_type_command(
+        &w, GW_MSG_TYPE_SETTINGS_TX_SET);
     if (rc == GW_OK) {
         rc = gw_put_uint(&w, GW_KEY_SETTINGS_TRANSACTION_ID);
         if (rc == GW_OK) rc = gw_put_uint(&w, transaction_id);
@@ -523,7 +525,8 @@ int gw_settings_encode_tx_commit(uint8_t *out_buf, size_t out_cap,
 
     rc = gw_put_uint(&w, GW_KEY_PROTOCOL_VERSION);
     if (rc == GW_OK) rc = gw_put_uint(&w, GW_PROTOCOL_VERSION);
-    if (rc == GW_OK) rc = gw_settings_put_type_command(&w, GW_COMMAND_COMMIT_SETTINGS);
+    if (rc == GW_OK) rc = gw_settings_put_type_command(
+        &w, GW_MSG_TYPE_SETTINGS_TX_COMMIT);
     if (rc == GW_OK) {
         rc = gw_put_uint(&w, GW_KEY_SETTINGS_TRANSACTION_ID);
         if (rc == GW_OK) rc = gw_put_uint(&w, transaction_id);
@@ -547,7 +550,8 @@ int gw_settings_encode_tx_abort(uint8_t *out_buf, size_t out_cap,
 
     rc = gw_put_uint(&w, GW_KEY_PROTOCOL_VERSION);
     if (rc == GW_OK) rc = gw_put_uint(&w, GW_PROTOCOL_VERSION);
-    if (rc == GW_OK) rc = gw_settings_put_type_command(&w, GW_COMMAND_SET_SETTINGS);
+    if (rc == GW_OK) rc = gw_settings_put_type_command(
+        &w, GW_MSG_TYPE_SETTINGS_TX_ABORT);
     if (rc == GW_OK) {
         rc = gw_put_uint(&w, GW_KEY_SETTINGS_TRANSACTION_ID);
         if (rc == GW_OK) rc = gw_put_uint(&w, transaction_id);
@@ -633,6 +637,31 @@ int gw_settings_decode_command(const gw_message_t *msg,
     if (msg->has_setting_id) {
         strlcpy(out_cmd->setting_id, msg->setting_id, sizeof(out_cmd->setting_id));
         out_cmd->has_setting_id = 1;
+    }
+    if (msg->has_setting_value) {
+        out_cmd->setting_value.type = msg->setting_value_type;
+        switch (msg->setting_value_type) {
+        case GW_SETTING_TYPE_BOOL:
+            out_cmd->setting_value.value.bool_val =
+                msg->setting_value.bool_val;
+            break;
+        case GW_SETTING_TYPE_INT:
+            out_cmd->setting_value.value.int_val =
+                msg->setting_value.int_val;
+            break;
+        case GW_SETTING_TYPE_STRING:
+            strlcpy(out_cmd->setting_value.value.str_val,
+                    msg->setting_value.str_val,
+                    sizeof(out_cmd->setting_value.value.str_val));
+            break;
+        case GW_SETTING_TYPE_ENUM:
+            out_cmd->setting_value.value.enum_val =
+                msg->setting_value.enum_val;
+            break;
+        default:
+            return GW_ERR_DECODE;
+        }
+        out_cmd->has_setting_value = 1;
     }
     if (msg->has_settings_new_revision) {
         out_cmd->new_revision = msg->settings_new_revision;

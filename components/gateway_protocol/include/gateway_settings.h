@@ -226,7 +226,7 @@ typedef struct {
     union {
         bool bool_val;
         int32_t int_val;
-        char str_val[64]; /* Bounded by GW_MSG_MAX_LEN */
+        char str_val[GW_SETTINGS_VALUE_STR_LEN];
         uint8_t enum_val;
     } value;
 } gw_settings_value_t;
