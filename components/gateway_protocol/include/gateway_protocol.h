@@ -31,6 +31,8 @@ extern "C" {
 
 /* Message size limits. Effective string max = LEN - 1 (NUL kept). */
 #define GW_MSG_MAX_LEN           256u
+#define GW_SETTINGS_MIN_MTU      247u
+#define GW_SETTINGS_TARGET_ATT_PAYLOAD 244u
 #define GW_MSG_TYPE_LEN           24u
 #define GW_MSG_DEVICE_ID_LEN      32u
 #define GW_MSG_COMMAND_LEN        32u

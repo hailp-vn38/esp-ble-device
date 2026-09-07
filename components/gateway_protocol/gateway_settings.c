@@ -99,19 +99,28 @@ static int gw_put_bool(gw_writer_t *w, bool value)
     return gw_put_head(w, 7u, value ? 21u : 20u);
 }
 
-/* ------------------------------------------------------------------ *
- * Encode helpers
- * ------------------------------------------------------------------ */
-
-/* All Settings messages use type=device_command with Settings-specific
- * command name. This is compatible with gw_message_decode. */
-static int gw_settings_put_type_command(gw_writer_t *w, const char *command)
+/* Emit actual Settings stream frame type (not device_command). */
+static int gw_settings_put_stream_type(gw_writer_t *w, const char *msg_type,
+                                       const char *command)
 {
     int rc = gw_put_uint(w, GW_KEY_TYPE);
-    if (rc == GW_OK) rc = gw_put_text(w, GW_MSG_TYPE_DEVICE_COMMAND);
+    if (rc == GW_OK) rc = gw_put_text(w, msg_type);
     if (rc == GW_OK) rc = gw_put_uint(w, GW_KEY_COMMAND);
     if (rc == GW_OK) rc = gw_put_text(w, command);
     return rc;
+}
+
+static int gw_settings_put_type_command(gw_writer_t *w, const char *command)
+{
+    return gw_settings_put_stream_type(w, GW_MSG_TYPE_DEVICE_COMMAND, command);
+}
+
+static int gw_settings_finish(gw_writer_t *w)
+{
+    if (w->len > GW_MSG_MAX_LEN || w->len > GW_SETTINGS_TARGET_ATT_PAYLOAD) {
+        return GW_ERR_NO_SPACE;
+    }
+    return (int)w->len;
 }
 
 static int gw_settings_put_request_id(gw_writer_t *w, uint32_t request_id)
@@ -146,7 +155,7 @@ int gw_settings_encode_begin(uint8_t *out_buf, size_t out_cap,
 
     rc = gw_put_uint(&w, GW_KEY_PROTOCOL_VERSION);
     if (rc == GW_OK) rc = gw_put_uint(&w, GW_PROTOCOL_VERSION);
-    if (rc == GW_OK) rc = gw_settings_put_type_command(&w, GW_COMMAND_DESCRIBE_SETTINGS);
+    if (rc == GW_OK) rc = gw_settings_put_stream_type(&w, GW_MSG_TYPE_SETTINGS_BEGIN, GW_COMMAND_DESCRIBE_SETTINGS);
     if (rc == GW_OK) {
         rc = gw_put_uint(&w, GW_KEY_TOTAL);
         if (rc == GW_OK) rc = gw_put_uint(&w, total);
@@ -155,8 +164,7 @@ int gw_settings_encode_begin(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 int gw_settings_encode_item(uint8_t *out_buf, size_t out_cap,
@@ -188,7 +196,7 @@ int gw_settings_encode_item(uint8_t *out_buf, size_t out_cap,
 
     rc = gw_put_uint(&w, GW_KEY_PROTOCOL_VERSION);
     if (rc == GW_OK) rc = gw_put_uint(&w, GW_PROTOCOL_VERSION);
-    if (rc == GW_OK) rc = gw_settings_put_type_command(&w, GW_COMMAND_DESCRIBE_SETTINGS);
+    if (rc == GW_OK) rc = gw_settings_put_stream_type(&w, GW_MSG_TYPE_SETTINGS_ITEM, GW_COMMAND_DESCRIBE_SETTINGS);
     if (rc == GW_OK) {
         rc = gw_put_uint(&w, GW_KEY_SETTINGS_SEQUENCE);
         if (rc == GW_OK) rc = gw_put_uint(&w, item_index);
@@ -237,8 +245,7 @@ int gw_settings_encode_item(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 int gw_settings_encode_option_item(uint8_t *out_buf, size_t out_cap,
@@ -256,7 +263,7 @@ int gw_settings_encode_option_item(uint8_t *out_buf, size_t out_cap,
 
     rc = gw_put_uint(&w, GW_KEY_PROTOCOL_VERSION);
     if (rc == GW_OK) rc = gw_put_uint(&w, GW_PROTOCOL_VERSION);
-    if (rc == GW_OK) rc = gw_settings_put_type_command(&w, GW_COMMAND_DESCRIBE_SETTINGS);
+    if (rc == GW_OK) rc = gw_settings_put_stream_type(&w, GW_MSG_TYPE_SETTINGS_OPTION_ITEM, GW_COMMAND_DESCRIBE_SETTINGS);
     if (rc == GW_OK) {
         rc = gw_put_uint(&w, GW_KEY_SETTINGS_SEQUENCE);
         if (rc == GW_OK) rc = gw_put_uint(&w, item_index);
@@ -273,8 +280,7 @@ int gw_settings_encode_option_item(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 int gw_settings_encode_end(uint8_t *out_buf, size_t out_cap,
@@ -288,7 +294,7 @@ int gw_settings_encode_end(uint8_t *out_buf, size_t out_cap,
 
     rc = gw_put_uint(&w, GW_KEY_PROTOCOL_VERSION);
     if (rc == GW_OK) rc = gw_put_uint(&w, GW_PROTOCOL_VERSION);
-    if (rc == GW_OK) rc = gw_settings_put_type_command(&w, GW_COMMAND_DESCRIBE_SETTINGS);
+    if (rc == GW_OK) rc = gw_settings_put_stream_type(&w, GW_MSG_TYPE_SETTINGS_END, GW_COMMAND_DESCRIBE_SETTINGS);
     if (rc == GW_OK) {
         rc = gw_put_uint(&w, GW_KEY_TOTAL);
         if (rc == GW_OK) rc = gw_put_uint(&w, total);
@@ -297,8 +303,7 @@ int gw_settings_encode_end(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 int gw_settings_encode_values_begin(uint8_t *out_buf, size_t out_cap,
@@ -313,7 +318,7 @@ int gw_settings_encode_values_begin(uint8_t *out_buf, size_t out_cap,
 
     rc = gw_put_uint(&w, GW_KEY_PROTOCOL_VERSION);
     if (rc == GW_OK) rc = gw_put_uint(&w, GW_PROTOCOL_VERSION);
-    if (rc == GW_OK) rc = gw_settings_put_type_command(&w, GW_COMMAND_GET_SETTINGS);
+    if (rc == GW_OK) rc = gw_settings_put_stream_type(&w, GW_MSG_TYPE_SETTINGS_VALUES_BEGIN, GW_COMMAND_GET_SETTINGS);
     if (rc == GW_OK) {
         rc = gw_put_uint(&w, GW_KEY_TOTAL);
         if (rc == GW_OK) rc = gw_put_uint(&w, total);
@@ -326,8 +331,7 @@ int gw_settings_encode_values_begin(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 int gw_settings_encode_value(uint8_t *out_buf, size_t out_cap,
@@ -346,7 +350,7 @@ int gw_settings_encode_value(uint8_t *out_buf, size_t out_cap,
 
     rc = gw_put_uint(&w, GW_KEY_PROTOCOL_VERSION);
     if (rc == GW_OK) rc = gw_put_uint(&w, GW_PROTOCOL_VERSION);
-    if (rc == GW_OK) rc = gw_settings_put_type_command(&w, GW_COMMAND_GET_SETTINGS);
+    if (rc == GW_OK) rc = gw_settings_put_stream_type(&w, GW_MSG_TYPE_SETTINGS_VALUE, GW_COMMAND_GET_SETTINGS);
     if (rc == GW_OK) {
         rc = gw_put_uint(&w, GW_KEY_SETTINGS_SEQUENCE);
         if (rc == GW_OK) rc = gw_put_uint(&w, item_index);
@@ -385,8 +389,7 @@ int gw_settings_encode_value(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 int gw_settings_encode_values_end(uint8_t *out_buf, size_t out_cap,
@@ -401,7 +404,7 @@ int gw_settings_encode_values_end(uint8_t *out_buf, size_t out_cap,
 
     rc = gw_put_uint(&w, GW_KEY_PROTOCOL_VERSION);
     if (rc == GW_OK) rc = gw_put_uint(&w, GW_PROTOCOL_VERSION);
-    if (rc == GW_OK) rc = gw_settings_put_type_command(&w, GW_COMMAND_GET_SETTINGS);
+    if (rc == GW_OK) rc = gw_settings_put_stream_type(&w, GW_MSG_TYPE_SETTINGS_VALUES_END, GW_COMMAND_GET_SETTINGS);
     if (rc == GW_OK) {
         rc = gw_put_uint(&w, GW_KEY_TOTAL);
         if (rc == GW_OK) rc = gw_put_uint(&w, total);
@@ -414,8 +417,7 @@ int gw_settings_encode_values_end(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 /* ------------------------------------------------------------------ *
@@ -448,8 +450,7 @@ int gw_settings_encode_tx_begin(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 int gw_settings_encode_tx_set(uint8_t *out_buf, size_t out_cap,
@@ -507,8 +508,7 @@ int gw_settings_encode_tx_set(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 int gw_settings_encode_tx_commit(uint8_t *out_buf, size_t out_cap,
@@ -532,8 +532,7 @@ int gw_settings_encode_tx_commit(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 int gw_settings_encode_tx_abort(uint8_t *out_buf, size_t out_cap,
@@ -557,8 +556,7 @@ int gw_settings_encode_tx_abort(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 int gw_settings_encode_commit_confirm(uint8_t *out_buf, size_t out_cap,
@@ -587,8 +585,7 @@ int gw_settings_encode_commit_confirm(uint8_t *out_buf, size_t out_cap,
     if (rc == GW_OK) rc = gw_settings_put_required_fields(&w);
 
     if (rc != GW_OK) return rc;
-    if (w.len > GW_MSG_MAX_LEN) return GW_ERR_NO_SPACE;
-    return (int)w.len;
+    return gw_settings_finish(&w);
 }
 
 /* ------------------------------------------------------------------ *

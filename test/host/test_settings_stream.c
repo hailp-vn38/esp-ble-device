@@ -398,6 +398,19 @@ static void test_encode_item_int(void)
     CHECK_INT(step, 1);
 }
 
+static void test_encode_frame_att_payload_limit(void)
+{
+    uint8_t buf[256];
+    char long_title[200];
+    memset(long_title, 'X', sizeof(long_title) - 1);
+    long_title[sizeof(long_title) - 1] = '\0';
+    int enc = gw_settings_encode_item(buf, sizeof(buf), 0, 1, 1,
+                                      "long_setting", long_title,
+                                      "", "", GW_SETTING_TYPE_STRING,
+                                      0, 32, 0, 0, 0);
+    CHECK_INT(enc, GW_ERR_NO_SPACE);
+}
+
 static void test_encode_item_string_max_length(void)
 {
     uint8_t buf[256];
@@ -641,11 +654,11 @@ static void test_frame_type_strings(void)
 
     gw_settings_encode_begin(buf, sizeof(buf), 1, 1);
     CHECK(cbor_get_type_string(buf, sizeof(buf), type_str, sizeof(type_str)) == 0);
-    CHECK(strcmp(type_str, "device_command") == 0);
+    CHECK(strcmp(type_str, GW_MSG_TYPE_SETTINGS_BEGIN) == 0);
 
     gw_settings_encode_values_begin(buf, sizeof(buf), 1, 1, 1);
     CHECK(cbor_get_type_string(buf, sizeof(buf), type_str, sizeof(type_str)) == 0);
-    CHECK(strcmp(type_str, "device_command") == 0);
+    CHECK(strcmp(type_str, GW_MSG_TYPE_SETTINGS_VALUES_BEGIN) == 0);
 }
 
 /* Test describe_settings: begin.total == end.total */
@@ -852,6 +865,7 @@ int main(void)
     test_encode_begin_frame();
     test_encode_item_bool();
     test_encode_item_int();
+    test_encode_frame_att_payload_limit();
     test_encode_item_string_max_length();
     test_encode_option_item();
     test_encode_end_frame();
