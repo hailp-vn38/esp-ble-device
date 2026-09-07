@@ -60,35 +60,52 @@ typedef struct {
     const char *label;
 } device_setting_option_t;
 
+typedef struct {
+    uint8_t index;
+} device_setting_enum_value_t;
+
+/* Typed callback ABI. A descriptor selects the member matching its type. */
+typedef union {
+    esp_err_t (*read_bool)(void *ctx, bool *out);
+    esp_err_t (*read_int)(void *ctx, int32_t *out);
+    esp_err_t (*read_string)(void *ctx, char *out, size_t out_cap);
+    esp_err_t (*read_enum)(void *ctx, device_setting_enum_value_t *out);
+    esp_err_t (*read)(void *ctx, void *out); /* legacy */
+} device_setting_read_cb_t;
+
+typedef union {
+    esp_err_t (*stage_bool)(void *ctx, bool value);
+    esp_err_t (*stage_int)(void *ctx, int32_t value);
+    esp_err_t (*stage_string)(void *ctx, const char *value, size_t value_len);
+    esp_err_t (*stage_enum)(void *ctx, device_setting_enum_value_t value);
+    esp_err_t (*stage)(void *ctx, const void *value); /* legacy */
+} device_setting_stage_cb_t;
+
 /* ------------------------------------------------------------------ *
  * Setting descriptor (static const in flash)
  * ------------------------------------------------------------------ */
 
 typedef struct device_setting_descriptor {
-    const char *id;         /* Unique identifier (e.g. "wifi_ssid") */
-    const char *title;      /* Human-readable title (e.g. "WiFi SSID") */
-    const char *group;      /* Group name (e.g. "network") or "" */
-    const char *unit;       /* Unit string (e.g. "dBm") or "" */
+    const char *id;
+    const char *title;
+    const char *group;
+    const char *unit;
     device_setting_type_t type;
-    uint16_t flags;         /* DEVICE_SETTING_FLAG_* */
-    int32_t min_value;      /* For INT: minimum value */
-    int32_t max_value;      /* For INT: maximum value */
-    int32_t step;           /* For INT: step size */
-    uint16_t max_length;    /* For STRING: max character count */
-    const device_setting_option_t *options;  /* For ENUM: option array */
-    uint8_t option_count;   /* For ENUM: number of options */
-    esp_err_t (*read)(void *ctx, void *out);     /* Read current value */
-    esp_err_t (*stage)(void *ctx, const void *value);  /* Stage new value */
-    void *ctx;              /* User context for read/stage callbacks */
+    uint16_t flags;
+    int32_t min_value;
+    int32_t max_value;
+    int32_t step;
+    uint16_t max_length;
+    const device_setting_option_t *options;
+    uint8_t option_count;
+    device_setting_read_cb_t read_cb;
+    device_setting_stage_cb_t stage_cb;
+    esp_err_t (*read)(void *ctx, void *out); /* compatibility ABI */
+    esp_err_t (*stage)(void *ctx, const void *value); /* compatibility ABI */
+    void *read_ctx;
+    void *stage_ctx;
+    void *ctx; /* compatibility context */
 } device_setting_descriptor_t;
-
-/* ------------------------------------------------------------------ *
- * Enum option value (for read/stage callbacks)
- * ------------------------------------------------------------------ */
-
-typedef struct {
-    uint8_t index;
-} device_setting_enum_value_t;
 
 /* ------------------------------------------------------------------ *
  * Secret value (for read callback)
@@ -109,12 +126,20 @@ typedef struct {
     uint32_t config_revision;
 } device_settings_blob_header_t;
 
+typedef esp_err_t (*device_settings_defaults_fn)(
+    void *payload, size_t payload_size);
+
+typedef esp_err_t (*device_settings_validate_fn)(
+    const void *config, size_t config_size);
+
 /* Product-owned static storage bound once per boot after init. */
 typedef struct {
     size_t config_size;
     uint16_t format_version;
     void *active_config;
     void *staging_config;
+    device_settings_defaults_fn defaults_fn;
+    device_settings_validate_fn validate_fn;
 } device_settings_storage_config_t;
 
 /* ------------------------------------------------------------------ *
@@ -129,11 +154,15 @@ typedef enum {
 } device_settings_tx_state_t;
 
 /* ------------------------------------------------------------------ *
- * Validation callback (product-level cross-field validation)
+ * Load result
  * ------------------------------------------------------------------ */
 
-typedef esp_err_t (*device_settings_validate_fn)(
-    const void *config, size_t config_size);
+typedef enum {
+    DEVICE_SETTINGS_LOAD_OK = 0,
+    DEVICE_SETTINGS_LOAD_DEFAULTS_NOT_FOUND,
+    DEVICE_SETTINGS_LOAD_DEFAULTS_RECOVERED,
+    DEVICE_SETTINGS_LOAD_FATAL,
+} device_settings_load_result_t;
 
 /* ------------------------------------------------------------------ *
  * Public API — Registry
@@ -214,9 +243,8 @@ bool device_settings_tx_get_last_committed(uint64_t *out_tx_id,
  * Public API — Persistence
  * ------------------------------------------------------------------ */
 
-/* Load config from NVS. If no config exists, uses defaults.
- * Returns ESP_OK on success, ESP_ERR_NOT_FOUND if no config saved. */
-esp_err_t device_settings_load(void);
+/* Load config from NVS or product defaults and report recovery outcome. */
+esp_err_t device_settings_load(device_settings_load_result_t *out_result);
 
 /* Save config to NVS atomically.
  * Internal use only — called by tx_commit. */
@@ -227,8 +255,9 @@ esp_err_t device_settings_save(const void *config, size_t config_size,
  * Public API — Product integration
  * ------------------------------------------------------------------ */
 
-/* Set the product-level validation callback. */
+/* Legacy callback setters; new products bind callbacks in storage config. */
 void device_settings_set_validate_fn(device_settings_validate_fn fn);
+void device_settings_set_defaults_fn(device_settings_defaults_fn fn);
 
 /* Legacy storage setters are internal compatibility helpers. New products
  * must use device_settings_configure(). */

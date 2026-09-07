@@ -244,14 +244,37 @@ esp_err_t device_settings_tx_set(const char *setting_id,
         }
     }
 
-    /* Stage the value (call product callback) */
-    if (desc->stage) {
-        esp_err_t err = desc->stage(desc->ctx, value);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "set: stage callback failed for '%s': %s",
-                     setting_id, esp_err_to_name(err));
-            return err;
+    /* Stage the value using typed callback when available. */
+    esp_err_t stage_err = ESP_OK;
+    void *stage_ctx = desc->stage_ctx != NULL ? desc->stage_ctx : desc->ctx;
+    if (desc->stage_cb.stage_bool != NULL) {
+        switch (type) {
+        case DEVICE_SETTING_BOOL:
+            stage_err = desc->stage_cb.stage_bool(stage_ctx, *(const bool *)value);
+            break;
+        case DEVICE_SETTING_INT:
+            stage_err = desc->stage_cb.stage_int(stage_ctx, *(const int32_t *)value);
+            break;
+        case DEVICE_SETTING_STRING:
+            stage_err = desc->stage_cb.stage_string(stage_ctx, (const char *)value,
+                                                   strlen((const char *)value));
+            break;
+        case DEVICE_SETTING_ENUM: {
+            device_setting_enum_value_t enum_value = { .index = *(const uint8_t *)value };
+            stage_err = desc->stage_cb.stage_enum(stage_ctx, enum_value);
+            break;
         }
+        default:
+            stage_err = ESP_ERR_INVALID_ARG;
+            break;
+        }
+    } else if (desc->stage != NULL) {
+        stage_err = desc->stage(stage_ctx, value);
+    }
+    if (stage_err != ESP_OK) {
+        ESP_LOGW(TAG, "set: stage callback failed for '%s': %s",
+                 setting_id, esp_err_to_name(stage_err));
+        return stage_err;
     }
 
     ESP_LOGD(TAG, "set: '%s' staged", setting_id);

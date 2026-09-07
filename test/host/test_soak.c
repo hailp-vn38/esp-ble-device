@@ -265,7 +265,7 @@ static void simulate_reboot(void)
      * load by reading the mock NVS blob into active config. */
     /* The mock NVS is transparent — nvs_get_blob returns whatever
      * was last written via nvs_set_blob. So we just call load. */
-    device_settings_load();
+    device_settings_load(NULL);
 }
 
 /* ================================================================== *

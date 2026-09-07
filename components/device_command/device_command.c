@@ -703,7 +703,10 @@ static int handle_read_settings(const gw_message_t *msg)
     /* setting_value per descriptor */
     for (uint16_t i = 0; i < total; i++) {
         const device_setting_descriptor_t *desc = device_settings_get(i);
-        if (desc == NULL || desc->read == NULL || desc->ctx == NULL) {
+        void *read_ctx = desc != NULL ?
+                         (desc->read_ctx != NULL ? desc->read_ctx : desc->ctx) : NULL;
+        if (desc == NULL || read_ctx == NULL ||
+            (desc->read == NULL && desc->read_cb.read_bool == NULL)) {
             goto fail;
         }
 
@@ -711,7 +714,8 @@ static int handle_read_settings(const gw_message_t *msg)
         if (desc->flags & DEVICE_SETTING_FLAG_SECRET) {
             device_setting_secret_value_t secret;
             memset(&secret, 0, sizeof(secret));
-            esp_err_t err = desc->read(desc->ctx, &secret);
+            esp_err_t err = desc->read != NULL ?
+                desc->read(read_ctx, &secret) : ESP_ERR_INVALID_ARG;
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "read_settings: secret read failed for '%s': %d",
                          desc->id, (int)err);
@@ -725,7 +729,8 @@ static int handle_read_settings(const gw_message_t *msg)
             /* Read value into stack buffer */
             uint8_t value_buf[64];
             memset(value_buf, 0, sizeof(value_buf));
-            esp_err_t err = desc->read(desc->ctx, value_buf);
+            esp_err_t err = desc->read != NULL ?
+                desc->read(read_ctx, value_buf) : ESP_ERR_INVALID_ARG;
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "read_settings: read failed for '%s': %d",
                          desc->id, (int)err);

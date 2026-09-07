@@ -63,6 +63,7 @@ reference_config_t *reference_config_get_staging(void);
 
 /* Apply factory defaults to a config blob. */
 void reference_config_apply_defaults(reference_config_t *cfg);
+esp_err_t reference_config_defaults_payload(void *payload, size_t payload_size);
 
 /* ------------------------------------------------------------------ *
  * Defaults

@@ -302,6 +302,8 @@ static const device_app_profile_t s_profile = {
     .settings_config_size = sizeof(reference_config_t),
     .settings_active_config = &g_reference_active_config,
     .settings_staging_config = &g_reference_staging_config,
+    .settings_defaults_fn = reference_config_defaults_payload,
+    .settings_validate_fn = reference_config_validate,
 };
 
 const device_app_profile_t *reference_product_profile(void)

@@ -160,6 +160,8 @@ static const device_setting_descriptor_t s_settings[] = {
         .flags = 0,
         .read = read_bool,
         .stage = stage_bool,
+        .read_ctx = &g_reference_active_config,
+        .stage_ctx = &g_reference_staging_config,
         .ctx = &g_reference_staging_config,
     },
     {
@@ -174,6 +176,8 @@ static const device_setting_descriptor_t s_settings[] = {
         .step = 1,
         .read = read_int_interval,
         .stage = stage_int_interval,
+        .read_ctx = &g_reference_active_config,
+        .stage_ctx = &g_reference_staging_config,
         .ctx = &g_reference_staging_config,
     },
     {
@@ -188,6 +192,8 @@ static const device_setting_descriptor_t s_settings[] = {
         .step = 1,
         .read = read_int_temp,
         .stage = stage_int_temp,
+        .read_ctx = &g_reference_active_config,
+        .stage_ctx = &g_reference_staging_config,
         .ctx = &g_reference_staging_config,
     },
     {
@@ -201,6 +207,8 @@ static const device_setting_descriptor_t s_settings[] = {
         .option_count = 3,
         .read = read_enum_fan,
         .stage = stage_enum_fan,
+        .read_ctx = &g_reference_active_config,
+        .stage_ctx = &g_reference_staging_config,
         .ctx = &g_reference_staging_config,
     },
     {
@@ -213,6 +221,8 @@ static const device_setting_descriptor_t s_settings[] = {
         .max_length = 32,
         .read = read_string_label,
         .stage = stage_string_label,
+        .read_ctx = &g_reference_active_config,
+        .stage_ctx = &g_reference_staging_config,
         .ctx = &g_reference_staging_config,
     },
     {
@@ -225,6 +235,8 @@ static const device_setting_descriptor_t s_settings[] = {
         .max_length = 32,
         .read = read_secret_token,
         .stage = stage_secret_token,
+        .read_ctx = &g_reference_active_config,
+        .stage_ctx = &g_reference_staging_config,
         .ctx = &g_reference_staging_config,
     },
     {
@@ -237,6 +249,8 @@ static const device_setting_descriptor_t s_settings[] = {
         .max_length = 16,
         .read = read_string_serial,
         .stage = NULL,
+        .read_ctx = &g_reference_active_config,
+        .stage_ctx = NULL,
         .ctx = &g_reference_staging_config,
     },
 };
@@ -268,6 +282,17 @@ esp_err_t reference_config_validate(const void *config, size_t config_size)
         return ESP_ERR_INVALID_ARG;
     }
 
+    return ESP_OK;
+}
+
+esp_err_t reference_config_defaults_payload(void *payload, size_t payload_size)
+{
+    if (payload == NULL || payload_size != sizeof(reference_config_t) -
+        sizeof(device_settings_blob_header_t)) return ESP_ERR_INVALID_ARG;
+    reference_config_t temp;
+    memset(&temp, 0, sizeof(temp));
+    reference_config_apply_defaults(&temp);
+    memcpy(payload, (const uint8_t *)&temp + sizeof(temp.header), payload_size);
     return ESP_OK;
 }
 

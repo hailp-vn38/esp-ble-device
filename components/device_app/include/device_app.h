@@ -38,6 +38,7 @@
 #include "ble_peripheral.h"
 #include "device_command.h"
 #include "device_event.h"
+#include "device_settings.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -97,6 +98,8 @@ typedef struct {
     size_t settings_config_size;
     void *settings_active_config;
     void *settings_staging_config;
+    device_settings_defaults_fn settings_defaults_fn;
+    device_settings_validate_fn settings_validate_fn;
 } device_app_profile_t;
 
 /* ------------------------------------------------------------------ *

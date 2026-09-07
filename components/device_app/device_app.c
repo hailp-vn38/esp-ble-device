@@ -160,6 +160,8 @@ device_app_result_t device_app_start(void)
                               p->settings_format_version : 1,
             .active_config = p->settings_active_config,
             .staging_config = p->settings_staging_config,
+            .defaults_fn = p->settings_defaults_fn,
+            .validate_fn = p->settings_validate_fn,
         };
         ret = device_settings_configure(&settings_config);
         if (ret != ESP_OK) {
@@ -178,7 +180,8 @@ device_app_result_t device_app_start(void)
             ESP_LOGE(TAG, "device_settings_freeze failed: %d", ret);
             return DEVICE_APP_ERR_STORAGE;
         }
-        (void)device_settings_load();
+        device_settings_load_result_t load_result;
+        (void)device_settings_load(&load_result);
     }
 
     /* Product init consumes committed configuration after Settings load. */

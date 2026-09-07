@@ -25,6 +25,7 @@ static struct {
     uint32_t config_revision;
     size_t config_size;
     uint16_t format_version;
+    device_settings_defaults_fn defaults_fn;
     device_settings_validate_fn validate_fn;
 
     /* Active config blob (in RAM, loaded from NVS) */
@@ -70,6 +71,8 @@ esp_err_t device_settings_configure(
     s_registry.format_version = config->format_version;
     s_registry.active_config = config->active_config;
     s_registry.staging_config = config->staging_config;
+    s_registry.defaults_fn = config->defaults_fn;
+    s_registry.validate_fn = config->validate_fn;
     s_registry.configured = true;
     return ESP_OK;
 }
@@ -181,6 +184,16 @@ void device_settings_set_format_version(uint16_t version)
 void device_settings_set_validate_fn(device_settings_validate_fn fn)
 {
     s_registry.validate_fn = fn;
+}
+
+void device_settings_set_defaults_fn(device_settings_defaults_fn fn)
+{
+    s_registry.defaults_fn = fn;
+}
+
+device_settings_defaults_fn device_settings_get_defaults_fn(void)
+{
+    return s_registry.defaults_fn;
 }
 
 size_t device_settings_get_config_size(void)
