@@ -256,6 +256,7 @@ bool device_settings_tx_get_last_committed(uint64_t *out_tx_id,
 
 /* Load config from NVS or product defaults and report recovery outcome. */
 esp_err_t device_settings_load(device_settings_load_result_t *out_result);
+esp_err_t device_settings_factory_reset(void);
 
 /* Save config to NVS atomically.
  * Internal use only — called by tx_commit. */

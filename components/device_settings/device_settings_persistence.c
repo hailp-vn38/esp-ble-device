@@ -32,6 +32,15 @@ device_settings_validate_fn device_settings_get_validate_fn(void);
 #define NVS_NAMESPACE  "device_cfg"
 #define NVS_KEY_CONFIG "config"
 
+#if defined(GW_HOST_TEST)
+__attribute__((weak)) int nvs_erase_key(nvs_handle_t handle, const char *key)
+{
+    (void)handle;
+    (void)key;
+    return ESP_OK;
+}
+#endif
+
 /* ------------------------------------------------------------------ *
  * Public API
  * ------------------------------------------------------------------ */
@@ -102,6 +111,35 @@ esp_err_t device_settings_load(device_settings_load_result_t *out_result)
     if (out_result != NULL) *out_result = DEVICE_SETTINGS_LOAD_OK;
     ESP_LOGI(TAG, "load: revision=%lu", (unsigned long)header->config_revision);
     return ESP_OK;
+}
+
+esp_err_t device_settings_factory_reset(void)
+{
+    if (device_settings_tx_get_state() != DEVICE_SETTINGS_TX_IDLE &&
+        device_settings_tx_get_state() != DEVICE_SETTINGS_TX_RESTART_PENDING) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        err = nvs_erase_key(handle, NVS_KEY_CONFIG);
+        if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+        if (err == ESP_OK) err = nvs_commit(handle);
+        nvs_close(handle);
+    } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = ESP_OK;
+    }
+    if (err != ESP_OK) return err;
+
+    void *active = (void *)device_settings_get_active_config();
+    void *staging = device_settings_get_staging_config();
+    size_t size = device_settings_get_config_size();
+    if (active == NULL || staging == NULL || size < sizeof(device_settings_blob_header_t)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    device_settings_tx_reset_state();
+    return load_defaults(active, staging, size);
 }
 
 esp_err_t device_settings_save(const void *config, size_t config_size,

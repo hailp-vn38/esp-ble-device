@@ -335,9 +335,17 @@ device_app_result_t device_app_get_status(device_app_status_t *out_status)
 
 device_app_result_t device_app_factory_reset(void)
 {
-    ESP_LOGW(TAG, "factory reset: clearing bonds");
+    if (s_app.profile == NULL || !s_app.profile->supports_factory_reset) {
+        return DEVICE_APP_ERR_INVALID_STATE;
+    }
+    ESP_LOGW(TAG, "factory reset: clearing bonds and Settings");
     ble_peripheral_clear_bonds();
-    return DEVICE_APP_OK;
+    if (device_settings_is_supported()) {
+        esp_err_t err = device_settings_factory_reset();
+        if (err != ESP_OK) return DEVICE_APP_ERR_STORAGE;
+    }
+    return device_app_schedule_restart(500) == DEVICE_APP_OK
+               ? DEVICE_APP_OK : DEVICE_APP_ERR_INVALID_STATE;
 }
 
 /* ------------------------------------------------------------------ *
