@@ -615,6 +615,31 @@ static int settings_err_to_code(esp_err_t err)
 }
 
 /* Encode + send one frame in a notify sequence. */
+static uint8_t settings_type_to_wire(device_setting_type_t type)
+{
+    switch (type) {
+    case DEVICE_SETTING_BOOL: return GW_SETTING_TYPE_BOOL;
+    case DEVICE_SETTING_INT: return GW_SETTING_TYPE_INT;
+    case DEVICE_SETTING_STRING: return GW_SETTING_TYPE_STRING;
+    case DEVICE_SETTING_ENUM: return GW_SETTING_TYPE_ENUM;
+    default: return GW_SETTING_TYPE_NONE;
+    }
+}
+
+static bool settings_wire_type_to_device(uint8_t wire_type,
+                                         device_setting_type_t *out_type)
+{
+    if (out_type == NULL) return false;
+    switch (wire_type) {
+    case GW_SETTING_TYPE_BOOL: *out_type = DEVICE_SETTING_BOOL; return true;
+    case GW_SETTING_TYPE_INT: *out_type = DEVICE_SETTING_INT; return true;
+    case GW_SETTING_TYPE_STRING: *out_type = DEVICE_SETTING_STRING; return true;
+    case GW_SETTING_TYPE_ENUM: *out_type = DEVICE_SETTING_ENUM; return true;
+    case GW_SETTING_TYPE_BOOL_LEGACY: *out_type = DEVICE_SETTING_BOOL; return true;
+    default: return false;
+    }
+}
+
 static int send_settings_frame(uint8_t storage[GW_MSG_MAX_LEN], int encoded)
 {
     if (encoded <= 0) return encoded;
@@ -738,7 +763,7 @@ static int handle_read_settings(const gw_message_t *msg)
             }
             bool configured = secret.configured;
             enc = gw_settings_encode_value(storage, sizeof(storage),
-                                           i, desc->id, GW_SETTING_TYPE_BOOL,
+                                           i, desc->id, settings_type_to_wire(desc->type),
                                            &configured, request_id);
         } else {
             /* Read value into stack buffer */
@@ -825,19 +850,24 @@ static int handle_settings_tx_command(const gw_message_t *msg)
             break;
         }
         const void *value_ptr = NULL;
-        switch (cmd.setting_value.type) {
-        case GW_SETTING_TYPE_BOOL:
+        device_setting_type_t device_type;
+        if (!settings_wire_type_to_device(cmd.setting_value.type, &device_type)) {
+            err = ESP_ERR_INVALID_ARG;
+            break;
+        }
+        switch (device_type) {
+        case DEVICE_SETTING_BOOL:
             value_ptr = &cmd.setting_value.value.bool_val;
             break;
-        case GW_SETTING_TYPE_INT:
+        case DEVICE_SETTING_INT:
             value_ptr = &cmd.setting_value.value.int_val;
             break;
-        case GW_SETTING_TYPE_STRING:
+        case DEVICE_SETTING_STRING:
             /* String is already bounded copy in gw_settings_command_t.
              * The stage callback will copy into the staging config. */
             value_ptr = cmd.setting_value.value.str_val;
             break;
-        case GW_SETTING_TYPE_ENUM:
+        case DEVICE_SETTING_ENUM:
             value_ptr = &cmd.setting_value.value.enum_val;
             break;
         default:
@@ -847,7 +877,7 @@ static int handle_settings_tx_command(const gw_message_t *msg)
         if (err == ESP_OK) {
             err = device_settings_tx_set_with_id(
                 cmd.transaction_id, cmd.setting_id,
-                (device_setting_type_t)cmd.setting_value.type, value_ptr);
+                device_type, value_ptr);
         }
         break;
     }

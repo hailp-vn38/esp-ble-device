@@ -55,12 +55,15 @@ extern "C" {
 
 /* Settings v2 message types (Phase 0 — additive, backward-compatible). */
 #define GW_MSG_TYPE_SETTINGS_BEGIN       "settings_begin"
-#define GW_MSG_TYPE_SETTINGS_ITEM        "setting_item"
-#define GW_MSG_TYPE_SETTINGS_OPTION_ITEM "setting_option_item"
+#define GW_MSG_TYPE_SETTINGS_ITEM        "settings_item"
+#define GW_MSG_TYPE_SETTINGS_OPTION_ITEM "settings_option_item"
 #define GW_MSG_TYPE_SETTINGS_END         "settings_end"
 #define GW_MSG_TYPE_SETTINGS_VALUES_BEGIN "settings_values_begin"
-#define GW_MSG_TYPE_SETTINGS_VALUE        "setting_value"
+#define GW_MSG_TYPE_SETTINGS_VALUE        "settings_values_value"
 #define GW_MSG_TYPE_SETTINGS_VALUES_END   "settings_values_end"
+#define GW_MSG_TYPE_SETTINGS_ITEM_LEGACY        "setting_item"
+#define GW_MSG_TYPE_SETTINGS_OPTION_ITEM_LEGACY "setting_option_item"
+#define GW_MSG_TYPE_SETTINGS_VALUE_LEGACY       "setting_value"
 #define GW_MSG_TYPE_SETTINGS_TX_BEGIN     "settings_tx_begin"
 #define GW_MSG_TYPE_SETTINGS_TX_SET       "settings_tx_set"
 #define GW_MSG_TYPE_SETTINGS_TX_COMMIT    "settings_tx_commit"
@@ -68,6 +71,9 @@ extern "C" {
 #define GW_MSG_TYPE_SETTINGS_COMMIT_CONFIRM "settings_commit_confirm"
 #define GW_COMMAND_DESCRIBE_SETTINGS      "describe_settings"
 #define GW_COMMAND_READ_SETTINGS          "read_settings"
+#define GW_COMMAND_GET_SETTINGS           "get_settings"
+#define GW_COMMAND_SET_SETTINGS           "set_settings"
+#define GW_COMMAND_COMMIT_SETTINGS       "commit_settings"
 
 /* CBOR numeric keys (wire contract, do not renumber). */
 enum {
@@ -152,11 +158,18 @@ typedef enum {
 
 /* Settings v2 type and flag constants (Phase 0). */
 typedef enum {
-    GW_SETTING_TYPE_BOOL   = 0,
-    GW_SETTING_TYPE_INT    = 1,
-    GW_SETTING_TYPE_STRING = 2,
-    GW_SETTING_TYPE_ENUM   = 3,
+    GW_SETTING_TYPE_NONE   = 0,
+    GW_SETTING_TYPE_BOOL   = 1,
+    GW_SETTING_TYPE_INT    = 2,
+    GW_SETTING_TYPE_FLOAT  = 3,
+    GW_SETTING_TYPE_STRING = 4,
+    GW_SETTING_TYPE_ENUM   = 5,
 } gw_setting_type_t;
+
+#define GW_SETTING_TYPE_BOOL_LEGACY   0
+#define GW_SETTING_TYPE_INT_LEGACY    1
+#define GW_SETTING_TYPE_STRING_LEGACY 2
+#define GW_SETTING_TYPE_ENUM_LEGACY   3
 
 enum {
     GW_SETTING_FLAG_READONLY  = 1u << 0,
