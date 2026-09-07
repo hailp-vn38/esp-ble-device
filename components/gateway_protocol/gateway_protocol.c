@@ -861,6 +861,137 @@ int gw_message_decode(const uint8_t *buf, size_t len, gw_message_t *out_msg)
             break;
         }
 
+        /* Settings v2 fields (Phase 0 — additive, backward-compatible). */
+        case GW_KEY_SETTINGS_SUPPORTED: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, 1u, &value);
+            if (rc == GW_OK) {
+                out_msg->settings_supported = (int)value;
+                out_msg->has_settings_supported = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_SETTINGS_SCHEMA_REVISION: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT16_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->settings_schema_revision = (uint16_t)value;
+                out_msg->has_settings_schema_revision = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_SETTINGS_ID:
+            rc = gw_get_text(&r, out_msg->setting_id,
+                             sizeof(out_msg->setting_id), false);
+            if (rc == GW_OK) out_msg->has_setting_id = 1;
+            break;
+
+        case GW_KEY_SETTINGS_TITLE:
+            rc = gw_get_text(&r, out_msg->setting_title,
+                             sizeof(out_msg->setting_title), true);
+            break;
+
+        case GW_KEY_SETTINGS_GROUP:
+            rc = gw_get_text(&r, out_msg->setting_group,
+                             sizeof(out_msg->setting_group), true);
+            break;
+
+        case GW_KEY_SETTINGS_UNIT:
+            rc = gw_get_text(&r, out_msg->setting_unit,
+                             sizeof(out_msg->setting_unit), true);
+            break;
+
+        case GW_KEY_SETTINGS_TYPE: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT8_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->setting_type = (uint8_t)value;
+                out_msg->has_setting_type = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_SETTINGS_FLAGS: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT16_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->setting_flags = (uint16_t)value;
+                out_msg->has_setting_flags = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_SETTINGS_MAX_LENGTH: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT16_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->setting_max_length = (uint16_t)value;
+                out_msg->has_setting_max_length = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_SETTINGS_OPTION_COUNT: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT8_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->setting_option_count = (uint8_t)value;
+                out_msg->has_setting_option_count = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_SETTINGS_OPTION_INDEX: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT8_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->setting_option_index = (uint8_t)value;
+                out_msg->has_setting_option_index = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_SETTINGS_TRANSACTION_ID: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT64_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->settings_transaction_id = value;
+                out_msg->has_settings_transaction_id = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_SETTINGS_EXPECTED_REVISION: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT32_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->settings_expected_revision = (uint32_t)value;
+                out_msg->has_settings_expected_revision = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_SETTINGS_NEW_REVISION: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT32_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->settings_new_revision = (uint32_t)value;
+                out_msg->has_settings_new_revision = 1;
+            }
+            break;
+        }
+
+        case GW_KEY_SETTINGS_SEQUENCE: {
+            uint64_t value = 0;
+            rc = gw_get_uint_bounded(&r, UINT16_MAX, &value);
+            if (rc == GW_OK) {
+                out_msg->has_setting_id = 1;  /* Sequence used as item index */
+            }
+            break;
+        }
+
         default:
             rc = gw_skip_item(&r, 0);
             break;

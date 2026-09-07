@@ -53,6 +53,22 @@ extern "C" {
 #define GW_COMMAND_READ_FEATURE_STATE    "read_feature_state"
 #define GW_EVENT_FEATURE_STATE           "feature_state"
 
+/* Settings v2 message types (Phase 0 — additive, backward-compatible). */
+#define GW_MSG_TYPE_SETTINGS_BEGIN       "settings_begin"
+#define GW_MSG_TYPE_SETTINGS_ITEM        "setting_item"
+#define GW_MSG_TYPE_SETTINGS_OPTION_ITEM "setting_option_item"
+#define GW_MSG_TYPE_SETTINGS_END         "settings_end"
+#define GW_MSG_TYPE_SETTINGS_VALUES_BEGIN "settings_values_begin"
+#define GW_MSG_TYPE_SETTINGS_VALUE        "setting_value"
+#define GW_MSG_TYPE_SETTINGS_VALUES_END   "settings_values_end"
+#define GW_MSG_TYPE_SETTINGS_TX_BEGIN     "settings_tx_begin"
+#define GW_MSG_TYPE_SETTINGS_TX_SET       "settings_tx_set"
+#define GW_MSG_TYPE_SETTINGS_TX_COMMIT    "settings_tx_commit"
+#define GW_MSG_TYPE_SETTINGS_TX_ABORT     "settings_tx_abort"
+#define GW_MSG_TYPE_SETTINGS_COMMIT_CONFIRM "settings_commit_confirm"
+#define GW_COMMAND_DESCRIBE_SETTINGS      "describe_settings"
+#define GW_COMMAND_READ_SETTINGS          "read_settings"
+
 /* CBOR numeric keys (wire contract, do not renumber). */
 enum {
     GW_KEY_PROTOCOL_VERSION = 0,
@@ -89,6 +105,24 @@ enum {
     GW_KEY_FEATURE_TOOL = 29,
     GW_KEY_FEATURE_TOTAL = 30,
     GW_KEY_FEATURE_DECIMALS = 31,
+
+    /* Settings v2 keys (Phase 0 — additive, backward-compatible). */
+    GW_KEY_SETTINGS_SUPPORTED = 32,
+    GW_KEY_SETTINGS_SCHEMA_REVISION = 33,
+    GW_KEY_SETTINGS_ID = 34,
+    GW_KEY_SETTINGS_TITLE = 35,
+    GW_KEY_SETTINGS_GROUP = 36,
+    GW_KEY_SETTINGS_UNIT = 37,
+    GW_KEY_SETTINGS_TYPE = 38,
+    GW_KEY_SETTINGS_FLAGS = 39,
+    GW_KEY_SETTINGS_VALUE = 40,
+    GW_KEY_SETTINGS_TRANSACTION_ID = 41,
+    GW_KEY_SETTINGS_EXPECTED_REVISION = 42,
+    GW_KEY_SETTINGS_NEW_REVISION = 43,
+    GW_KEY_SETTINGS_OPTION_INDEX = 44,
+    GW_KEY_SETTINGS_MAX_LENGTH = 45,
+    GW_KEY_SETTINGS_OPTION_COUNT = 46,
+    GW_KEY_SETTINGS_SEQUENCE = 47,
 };
 
 typedef enum {
@@ -115,6 +149,20 @@ typedef enum {
     GW_PROP_CONTACT = 7,
     GW_PROP_VALUE = 8,
 } gw_feature_property_t;
+
+/* Settings v2 type and flag constants (Phase 0). */
+typedef enum {
+    GW_SETTING_TYPE_BOOL   = 0,
+    GW_SETTING_TYPE_INT    = 1,
+    GW_SETTING_TYPE_STRING = 2,
+    GW_SETTING_TYPE_ENUM   = 3,
+} gw_setting_type_t;
+
+enum {
+    GW_SETTING_FLAG_READONLY  = 1u << 0,
+    GW_SETTING_FLAG_SECRET    = 1u << 1,
+    GW_SETTING_FLAG_ADVANCED  = 1u << 2,
+};
 
 /* ------------------------------------------------------------------ *
  * Result codes
@@ -192,6 +240,36 @@ typedef struct {
     int has_feature_total;
     uint8_t feature_decimals;
     int has_feature_decimals;
+
+    /* Settings v2 fields (Phase 0 — additive, backward-compatible). */
+    int has_settings_supported;
+    int settings_supported;
+    uint16_t settings_schema_revision;
+    int has_settings_schema_revision;
+    char setting_id[GW_FEATURE_ID_LEN];
+    int has_setting_id;
+    char setting_title[GW_MSG_CAP_LABEL_LEN];
+    int has_setting_title;
+    char setting_group[32];
+    int has_setting_group;
+    char setting_unit[GW_MSG_CAP_UNIT_LEN];
+    int has_setting_unit;
+    uint8_t setting_type;
+    int has_setting_type;
+    uint16_t setting_flags;
+    int has_setting_flags;
+    uint16_t setting_max_length;
+    int has_setting_max_length;
+    uint8_t setting_option_count;
+    int has_setting_option_count;
+    uint8_t setting_option_index;
+    int has_setting_option_index;
+    uint64_t settings_transaction_id;
+    int has_settings_transaction_id;
+    uint32_t settings_expected_revision;
+    int has_settings_expected_revision;
+    uint32_t settings_new_revision;
+    int has_settings_new_revision;
 } gw_message_t;
 
 /* Zero-init a message; TX then defaults to emitting protocol v4. */

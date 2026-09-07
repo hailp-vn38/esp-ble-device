@@ -16,11 +16,15 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/timers.h"
+
 #include "gateway_protocol.h"
 #include "ble_peripheral.h"
 #include "device_command.h"
 #include "device_event.h"
 #include "device_feature.h"
+#include "device_settings.h"
 
 static const char *TAG = "device_app";
 
@@ -38,12 +42,60 @@ static struct {
 } s_app;
 
 /* ------------------------------------------------------------------ *
+ * Restart timer (Phase 4 — safe restart helper)
+ *
+ * Never call esp_restart() from BLE GATT callback / notify task context.
+ * A one-shot FreeRTOS timer fires after the requested delay, allowing
+ * the current handler stack to unwind. The timer callback runs in the
+ * FreeRTOS timer service task, which is a safe context for restart.
+ * ------------------------------------------------------------------ */
+
+static TimerHandle_t s_restart_timer = NULL;
+static bool s_restart_pending = false;
+
+static void restart_timer_cb(TimerHandle_t xTimer)
+{
+    (void)xTimer;
+    ESP_LOGW(TAG, "restart timer fired — rebooting now");
+    s_restart_pending = false;
+    /* Stop BLE advertising before restart. */
+    ble_peripheral_stop();
+    /* Brief delay to let NimBLE unwind. */
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
+    /* unreachable */
+}
+
+/* ------------------------------------------------------------------ *
  * BLE notify bridge (ble_peripheral -> device_command/device_event)
  * ------------------------------------------------------------------ */
 
 static int ble_notify_bridge(const uint8_t *data, size_t len)
 {
     return ble_peripheral_notify(data, len);
+}
+
+/* ------------------------------------------------------------------ *
+ * BLE state callback (Phase 4: disconnect-after-commit handling)
+ * ------------------------------------------------------------------ */
+
+static ble_peripheral_state_t s_prev_ble_state = BLE_PERIPH_STOPPED;
+
+static void ble_state_callback(ble_peripheral_state_t state)
+{
+    /* On disconnect, check if settings expects a confirm.
+     * Only act on ADVERTISING transition from a CONNECTED* state
+     * (i.e. after BLE disconnect), not initial advertising on boot. */
+    bool was_connected = (s_prev_ble_state == BLE_PERIPH_CONNECTED ||
+                          s_prev_ble_state == BLE_PERIPH_SECURING ||
+                          s_prev_ble_state == BLE_PERIPH_WAIT_CCCD ||
+                          s_prev_ble_state == BLE_PERIPH_READY);
+
+    if (state == BLE_PERIPH_ADVERTISING && was_connected) {
+        device_settings_tx_on_disconnect();
+    }
+
+    s_prev_ble_state = state;
 }
 
 /* ------------------------------------------------------------------ *
@@ -104,6 +156,40 @@ device_app_result_t device_app_start(void)
     rc = device_feature_init();
     if (rc != 0) return DEVICE_APP_ERR_PRODUCT;
 
+    /* Step 8.5: Settings v2 init (if configured). */
+    if (p->register_settings || p->settings_config_size > 0) {
+        /* Set config size and format version before init */
+        if (p->settings_config_size > 0) {
+            device_settings_set_config_size(p->settings_config_size);
+            device_settings_set_format_version(1);
+        }
+
+        rc = device_settings_init();
+        if (rc != ESP_OK) {
+            ESP_LOGE(TAG, "device_settings_init failed: %d", rc);
+            return DEVICE_APP_ERR_PRODUCT;
+        }
+
+        /* Register settings if callback provided */
+        if (p->register_settings) {
+            rc = p->register_settings();
+            if (rc != ESP_OK) {
+                ESP_LOGE(TAG, "register_settings failed: %d", rc);
+                return DEVICE_APP_ERR_PRODUCT;
+            }
+        }
+
+        /* Freeze registry */
+        rc = device_settings_freeze();
+        if (rc != ESP_OK) {
+            ESP_LOGE(TAG, "device_settings_freeze failed: %d", rc);
+            return DEVICE_APP_ERR_PRODUCT;
+        }
+
+        /* Load config from NVS */
+        device_settings_load();
+    }
+
     /* Step 9: device_command init. */
     rc = device_command_init(ble_notify_bridge);
     if (rc != 0) return DEVICE_APP_ERR_COMMAND;
@@ -145,7 +231,7 @@ device_app_result_t device_app_start(void)
         .require_bonding = true,
         .adv_interval_ms = 100,
     };
-    rc = ble_peripheral_init(&ble_cfg, ble_rx_bridge, NULL);
+    rc = ble_peripheral_init(&ble_cfg, ble_rx_bridge, ble_state_callback);
     if (rc != 0) return DEVICE_APP_ERR_BLE;
 
     /* Step 15: Start product. */
@@ -157,6 +243,40 @@ device_app_result_t device_app_start(void)
     /* Step 16: Start BLE (advertising). */
     rc = ble_peripheral_start();
     if (rc != 0) return DEVICE_APP_ERR_BLE;
+
+    /* Step 17: Create one-shot restart timer (Phase 4). */
+    if (s_restart_timer == NULL) {
+        s_restart_timer = xTimerCreate(
+            "settings_restart",
+            pdMS_TO_TICKS(1000),   /* period — overwritten per-shot */
+            pdFALSE,               /* one-shot */
+            NULL,                  /* timer ID not used */
+            restart_timer_cb);
+        if (s_restart_timer == NULL) {
+            ESP_LOGE(TAG, "restart timer create failed");
+            return DEVICE_APP_ERR_NO_RESOURCE;
+        }
+    }
+
+    /* Step 18: Create confirm timeout timer (Phase 4).
+     * If COMMIT_CONFIRM not received within CONFIRM_TIMEOUT_MS,
+     * device auto-restarts with persisted config. */
+    {
+        static TimerHandle_t s_confirm_timer = NULL;
+        if (s_confirm_timer == NULL) {
+            s_confirm_timer = xTimerCreate(
+                "settings_confirm",
+                pdMS_TO_TICKS(5000),  /* period — overwritten per-shot */
+                pdFALSE,              /* one-shot */
+                NULL,
+                device_settings_confirm_timeout_cb);
+            if (s_confirm_timer == NULL) {
+                ESP_LOGE(TAG, "confirm timer create failed");
+                return DEVICE_APP_ERR_NO_RESOURCE;
+            }
+            device_settings_tx_set_confirm_timer(s_confirm_timer);
+        }
+    }
 
     s_app.started = true;
     ESP_LOGI(TAG, "started (model=%s)",
@@ -222,4 +342,42 @@ device_app_result_t device_app_set_profile(const device_app_profile_t *profile)
         strlcpy(s_app.device_id, profile->model, sizeof(s_app.device_id));
     }
     return DEVICE_APP_OK;
+}
+
+/* ------------------------------------------------------------------ *
+ * Restart scheduling API (Phase 4)
+ * ------------------------------------------------------------------ */
+
+device_app_result_t device_app_schedule_restart(uint32_t delay_ms)
+{
+    if (s_restart_timer == NULL) {
+        ESP_LOGE(TAG, "schedule_restart: timer not created");
+        return DEVICE_APP_ERR_INVALID_STATE;
+    }
+
+    /* Use portMAX_DELAY to guarantee timer command is accepted.
+     * Stop previous timer, change period, then start fresh. */
+    xTimerStop(s_restart_timer, portMAX_DELAY);
+    xTimerChangePeriod(s_restart_timer, pdMS_TO_TICKS(delay_ms), portMAX_DELAY);
+    xTimerStart(s_restart_timer, portMAX_DELAY);
+    s_restart_pending = true;
+
+    ESP_LOGW(TAG, "restart scheduled in %lu ms", (unsigned long)delay_ms);
+    return DEVICE_APP_OK;
+}
+
+device_app_result_t device_app_cancel_restart(void)
+{
+    if (s_restart_timer == NULL) return DEVICE_APP_ERR_INVALID_STATE;
+    if (!s_restart_pending) return DEVICE_APP_OK;
+
+    xTimerStop(s_restart_timer, portMAX_DELAY);
+    s_restart_pending = false;
+    ESP_LOGI(TAG, "restart cancelled");
+    return DEVICE_APP_OK;
+}
+
+bool device_app_is_restart_scheduled(void)
+{
+    return s_restart_pending;
 }

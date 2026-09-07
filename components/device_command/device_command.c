@@ -51,8 +51,10 @@
 #include "freertos/queue.h"
 
 #include "gateway_protocol.h"
+#include "gateway_settings.h"
 #include "ble_peripheral.h"
 #include "device_feature.h"
+#include "device_settings.h"
 
 static const char *TAG = "device_command";
 
@@ -121,6 +123,13 @@ static device_cmd_result_t cmd_get_info_handler(
     const gw_message_t *request, device_cmd_response_t *response);
 static device_cmd_result_t cmd_get_state_handler(
     const gw_message_t *request, device_cmd_response_t *response);
+static device_cmd_result_t cmd_describe_settings_handler(
+    const gw_message_t *request, device_cmd_response_t *response);
+static device_cmd_result_t cmd_read_settings_handler(
+    const gw_message_t *request, device_cmd_response_t *response);
+
+/* Settings v2 command handling (Phase 0). */
+static int handle_settings_command(const gw_message_t *msg);
 
 /* ------------------------------------------------------------------ *
  * Registry lookup
@@ -457,6 +466,17 @@ static void cmd_worker(void *arg)
             continue;
         }
 
+        /* Settings v2 commands (Phase 0). */
+        if (strcmp(msg.command, GW_COMMAND_DESCRIBE_SETTINGS) == 0 ||
+            strcmp(msg.command, GW_COMMAND_READ_SETTINGS) == 0 ||
+            strcmp(msg.command, GW_MSG_TYPE_SETTINGS_TX_BEGIN) == 0 ||
+            strcmp(msg.command, GW_MSG_TYPE_SETTINGS_TX_SET) == 0 ||
+            strcmp(msg.command, GW_MSG_TYPE_SETTINGS_TX_COMMIT) == 0 ||
+            strcmp(msg.command, GW_MSG_TYPE_SETTINGS_TX_ABORT) == 0) {
+            handle_settings_command(&msg);
+            continue;
+        }
+
         /* Lookup handler. */
         device_cmd_handler_t handler = find_handler(msg.command);
         if (handler == NULL) {
@@ -520,6 +540,379 @@ static device_cmd_result_t cmd_get_state_handler(
     return DEVICE_CMD_OK;
 }
 
+static device_cmd_result_t cmd_describe_settings_handler(
+    const gw_message_t *request, device_cmd_response_t *response)
+{
+    /* Stub: actual settings description will be implemented in Phase 2.
+     * For now, respond with success=false to indicate unsupported. */
+    response->success = false;
+    response->int_value = 0;
+    return DEVICE_CMD_OK;
+}
+
+static device_cmd_result_t cmd_read_settings_handler(
+    const gw_message_t *request, device_cmd_response_t *response)
+{
+    /* Stub: actual settings values will be implemented in Phase 2.
+     * For now, respond with success=false to indicate unsupported. */
+    response->success = false;
+    response->int_value = 0;
+    return DEVICE_CMD_OK;
+}
+
+/* ------------------------------------------------------------------ *
+ * Settings v2 command handling (Phase 2 — BLE Discovery & Streaming).
+ *
+ * Handles describe_settings, read_settings, and transaction commands.
+ * Streams schema/value frames via bounded notify sequence.
+ * ------------------------------------------------------------------ */
+
+/* Schema revision — increment when descriptor schema changes. */
+#define DEVICE_SETTINGS_SCHEMA_REVISION 1
+
+/* Settings-specific error codes (for ACK int_value on failure). */
+enum {
+    SETTINGS_ERR_OK                = 0,
+    SETTINGS_ERR_INVALID_ARGUMENT  = 1,
+    SETTINGS_ERR_UNSUPPORTED       = 2,
+    SETTINGS_ERR_TYPE_MISMATCH     = 3,
+    SETTINGS_ERR_OUT_OF_RANGE      = 4,
+    SETTINGS_ERR_READONLY          = 5,
+    SETTINGS_ERR_REVISION_CONFLICT = 6,
+    SETTINGS_ERR_TX_BUSY           = 7,
+    SETTINGS_ERR_TX_NOT_ACTIVE     = 8,
+    SETTINGS_ERR_TX_ID_MISMATCH    = 9,
+    SETTINGS_ERR_VALIDATION_FAILED = 10,
+    SETTINGS_ERR_PERSIST_FAILED    = 11,
+    SETTINGS_ERR_INTERNAL_ERROR    = 12,
+};
+
+/* Map esp_err_t to settings-specific error code. */
+static int settings_err_to_code(esp_err_t err)
+{
+    switch (err) {
+    case ESP_OK:                return SETTINGS_ERR_OK;
+    case ESP_ERR_INVALID_ARG:   return SETTINGS_ERR_INVALID_ARGUMENT;
+    case ESP_ERR_INVALID_STATE: return SETTINGS_ERR_TX_NOT_ACTIVE;
+    case ESP_ERR_NOT_FOUND:     return SETTINGS_ERR_INTERNAL_ERROR;
+    default:                    return SETTINGS_ERR_INTERNAL_ERROR;
+    }
+}
+
+/* Encode + send one frame in a notify sequence. */
+static int send_settings_frame(uint8_t storage[GW_MSG_MAX_LEN], int encoded)
+{
+    if (encoded <= 0) return encoded;
+    return ble_peripheral_notify_sequence_send(
+        storage, (size_t)encoded, pdMS_TO_TICKS(1000));
+}
+
+/* Send ACK as last frame in a notify sequence. */
+static int send_settings_ack(uint8_t storage[GW_MSG_MAX_LEN],
+                             const gw_message_t *msg, bool success)
+{
+    gw_message_t ack;
+    gw_build_ack(&ack, msg, msg->device_id, success, 0);
+    int encoded = gw_message_encode(&ack, storage, GW_MSG_MAX_LEN);
+    return send_settings_frame(storage, encoded);
+}
+
+/* Stream describe_settings response:
+ *   settings_begin -> setting_item* -> setting_option_item* -> settings_end -> ACK */
+static int handle_describe_settings(const gw_message_t *msg)
+{
+    uint16_t total = (uint16_t)device_settings_count();
+    uint32_t request_id = msg->has_request_id ? msg->request_id : 0;
+
+    uint8_t storage[GW_MSG_MAX_LEN];
+    if (ble_peripheral_notify_sequence_begin() != 0) {
+        ESP_LOGW(TAG, "describe_settings: notify sequence begin failed");
+        return -1;
+    }
+
+    /* settings_begin */
+    int enc = gw_settings_encode_begin(storage, sizeof(storage),
+                                       total, request_id);
+    if (send_settings_frame(storage, enc) != 0) goto fail;
+
+    /* setting_item per descriptor */
+    for (uint16_t i = 0; i < total; i++) {
+        const device_setting_descriptor_t *desc = device_settings_get(i);
+        if (desc == NULL) goto fail;
+
+        enc = gw_settings_encode_item(storage, sizeof(storage),
+                                      i, total, request_id,
+                                      desc->id, desc->title,
+                                      desc->group ? desc->group : "",
+                                      desc->unit ? desc->unit : "",
+                                      (uint8_t)desc->type, desc->flags,
+                                      desc->max_length,
+                                      desc->min_value, desc->max_value,
+                                      (uint32_t)desc->step);
+        if (send_settings_frame(storage, enc) != 0) goto fail;
+
+        /* Emit enum options after the setting_item */
+        if (desc->type == DEVICE_SETTING_ENUM &&
+            desc->options != NULL && desc->option_count > 0) {
+            for (uint8_t j = 0; j < desc->option_count; j++) {
+                enc = gw_settings_encode_option_item(storage, sizeof(storage),
+                                                     i, j, request_id,
+                                                     desc->options[j].label);
+                if (send_settings_frame(storage, enc) != 0) goto fail;
+            }
+        }
+    }
+
+    /* settings_end */
+    enc = gw_settings_encode_end(storage, sizeof(storage),
+                                 total, request_id);
+    if (send_settings_frame(storage, enc) != 0) goto fail;
+
+    /* ACK */
+    if (send_settings_ack(storage, msg, true) != 0) goto fail;
+
+    ble_peripheral_notify_sequence_end();
+    ESP_LOGI(TAG, "describe_settings: streamed %u settings", total);
+    return 0;
+
+fail:
+    ble_peripheral_notify_sequence_abort();
+    ble_peripheral_notify_sequence_end();
+    return -1;
+}
+
+/* Stream read_settings response:
+ *   settings_values_begin -> setting_value* -> settings_values_end -> ACK */
+static int handle_read_settings(const gw_message_t *msg)
+{
+    uint16_t total = (uint16_t)device_settings_count();
+    uint32_t revision = device_settings_get_revision();
+    uint32_t request_id = msg->has_request_id ? msg->request_id : 0;
+
+    uint8_t storage[GW_MSG_MAX_LEN];
+    if (ble_peripheral_notify_sequence_begin() != 0) {
+        ESP_LOGW(TAG, "read_settings: notify sequence begin failed");
+        return -1;
+    }
+
+    /* settings_values_begin */
+    int enc = gw_settings_encode_values_begin(storage, sizeof(storage),
+                                              total, revision, request_id);
+    if (send_settings_frame(storage, enc) != 0) goto fail;
+
+    /* setting_value per descriptor */
+    for (uint16_t i = 0; i < total; i++) {
+        const device_setting_descriptor_t *desc = device_settings_get(i);
+        if (desc == NULL || desc->read == NULL || desc->ctx == NULL) {
+            goto fail;
+        }
+
+        /* Secret settings emit only configured/not-configured */
+        if (desc->flags & DEVICE_SETTING_FLAG_SECRET) {
+            device_setting_secret_value_t secret;
+            memset(&secret, 0, sizeof(secret));
+            esp_err_t err = desc->read(desc->ctx, &secret);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "read_settings: secret read failed for '%s': %d",
+                         desc->id, (int)err);
+                goto fail;
+            }
+            bool configured = secret.configured;
+            enc = gw_settings_encode_value(storage, sizeof(storage),
+                                           i, desc->id, GW_SETTING_TYPE_BOOL,
+                                           &configured, request_id);
+        } else {
+            /* Read value into stack buffer */
+            uint8_t value_buf[64];
+            memset(value_buf, 0, sizeof(value_buf));
+            esp_err_t err = desc->read(desc->ctx, value_buf);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "read_settings: read failed for '%s': %d",
+                         desc->id, (int)err);
+                goto fail;
+            }
+            enc = gw_settings_encode_value(storage, sizeof(storage),
+                                           i, desc->id, (uint8_t)desc->type,
+                                           value_buf, request_id);
+        }
+        if (send_settings_frame(storage, enc) != 0) goto fail;
+    }
+
+    /* settings_values_end */
+    enc = gw_settings_encode_values_end(storage, sizeof(storage),
+                                        total, revision, request_id);
+    if (send_settings_frame(storage, enc) != 0) goto fail;
+
+    /* ACK */
+    if (send_settings_ack(storage, msg, true) != 0) goto fail;
+
+    ble_peripheral_notify_sequence_end();
+    ESP_LOGI(TAG, "read_settings: streamed %u values (rev=%lu)",
+             total, (unsigned long)revision);
+    return 0;
+
+fail:
+    ble_peripheral_notify_sequence_abort();
+    ble_peripheral_notify_sequence_end();
+    return -1;
+}
+
+/* Handle transaction commands (TX_BEGIN, TX_SET, TX_COMMIT, TX_ABORT).
+ *
+ * Rules (Phase 3):
+ *   - Only one transaction active at a time (serialized).
+ *   - Transaction ID checked on every tx command.
+ *   - BEGIN: idempotent if same tx_id + same expected_revision.
+ *   - SET: bounded value copy, no heap allocation for scalars.
+ *   - COMMIT: validates all staged changes, NVS atomic commit,
+ *             state -> COMMITTED_WAIT_CONFIRM. No restart here.
+ *   - ABORT: safe to call even if no transaction active (idempotent).
+ *   - ACK int_value: current_revision (BEGIN), new_revision (COMMIT),
+ *                    error code on failure.
+ */
+static int handle_settings_tx_command(const gw_message_t *msg)
+{
+    gw_settings_command_t cmd;
+    if (gw_settings_decode_command(msg, &cmd) != GW_OK) {
+        ESP_LOGW(TAG, "settings_tx: decode failed");
+        device_cmd_response_t resp = { .success = false,
+                                       .int_value = SETTINGS_ERR_INVALID_ARGUMENT };
+        send_ack(msg, &resp);
+        return -1;
+    }
+
+    esp_err_t err = ESP_OK;
+    device_cmd_response_t response = { 0 };
+
+    switch (cmd.cmd_type) {
+    case GW_SETTINGS_CMD_TX_BEGIN: {
+        if (!cmd.has_transaction_id || !cmd.has_expected_revision) {
+            err = ESP_ERR_INVALID_ARG;
+            break;
+        }
+        err = device_settings_tx_begin(cmd.transaction_id,
+                                       cmd.expected_revision);
+        if (err == ESP_OK) {
+            /* ACK carries current_revision (before transaction). */
+            response.int_value = (int)device_settings_get_revision();
+        }
+        break;
+    }
+    case GW_SETTINGS_CMD_TX_SET: {
+        if (!cmd.has_transaction_id || !cmd.has_setting_id ||
+            !cmd.has_setting_value) {
+            err = ESP_ERR_INVALID_ARG;
+            break;
+        }
+        const void *value_ptr = NULL;
+        switch (cmd.setting_value.type) {
+        case GW_SETTING_TYPE_BOOL:
+            value_ptr = &cmd.setting_value.value.bool_val;
+            break;
+        case GW_SETTING_TYPE_INT:
+            value_ptr = &cmd.setting_value.value.int_val;
+            break;
+        case GW_SETTING_TYPE_STRING:
+            /* String is already bounded copy in gw_settings_command_t.
+             * The stage callback will copy into the staging config. */
+            value_ptr = cmd.setting_value.value.str_val;
+            break;
+        case GW_SETTING_TYPE_ENUM:
+            value_ptr = &cmd.setting_value.value.enum_val;
+            break;
+        default:
+            err = ESP_ERR_INVALID_ARG;
+            break;
+        }
+        if (err == ESP_OK) {
+            err = device_settings_tx_set(cmd.setting_id,
+                                         (device_setting_type_t)cmd.setting_value.type,
+                                         value_ptr);
+        }
+        break;
+    }
+    case GW_SETTINGS_CMD_TX_COMMIT: {
+        if (!cmd.has_transaction_id) {
+            err = ESP_ERR_INVALID_ARG;
+            break;
+        }
+        uint32_t new_revision = 0;
+        err = device_settings_tx_commit(cmd.transaction_id, &new_revision);
+        if (err == ESP_OK) {
+            /* ACK carries new_revision after commit. */
+            response.int_value = (int)new_revision;
+        }
+        break;
+    }
+    case GW_SETTINGS_CMD_TX_ABORT: {
+        if (!cmd.has_transaction_id) {
+            err = ESP_ERR_INVALID_ARG;
+            break;
+        }
+        /* ABORT is idempotent — safe to call even if no tx active. */
+        err = device_settings_tx_abort(cmd.transaction_id);
+        break;
+    }
+    case GW_SETTINGS_CMD_TX_CONFIRM: {
+        if (!cmd.has_transaction_id) {
+            err = ESP_ERR_INVALID_ARG;
+            break;
+        }
+        /* Verify revision if provided (idempotent — same revision = OK). */
+        if (cmd.has_new_revision) {
+            uint32_t current_rev = device_settings_get_revision();
+            if (cmd.new_revision != current_rev) {
+                err = ESP_ERR_INVALID_VERSION;
+                break;
+            }
+        }
+        err = device_settings_tx_confirm_and_restart();
+        break;
+    }
+    default:
+        err = ESP_ERR_INVALID_ARG;
+        break;
+    }
+
+    response.success = (err == ESP_OK);
+    if (err != ESP_OK) {
+        response.int_value = settings_err_to_code(err);
+        ESP_LOGW(TAG, "settings_tx: cmd=%d err=%d code=%d",
+                 (int)cmd.cmd_type, (int)err, response.int_value);
+    } else {
+        ESP_LOGI(TAG, "settings_tx: cmd=%d ok (int=%d)",
+                 (int)cmd.cmd_type, response.int_value);
+    }
+
+    send_ack(msg, &response);
+    return (err == ESP_OK) ? 0 : -1;
+}
+
+/* Main settings command dispatcher. */
+static int handle_settings_command(const gw_message_t *msg)
+{
+    if (msg == NULL) return -1;
+
+    if (strcmp(msg->command, GW_COMMAND_DESCRIBE_SETTINGS) == 0) {
+        return handle_describe_settings(msg);
+    }
+    if (strcmp(msg->command, GW_COMMAND_READ_SETTINGS) == 0) {
+        return handle_read_settings(msg);
+    }
+    /* Transaction commands */
+    if (strcmp(msg->command, GW_MSG_TYPE_SETTINGS_TX_BEGIN) == 0 ||
+        strcmp(msg->command, GW_MSG_TYPE_SETTINGS_TX_SET) == 0 ||
+        strcmp(msg->command, GW_MSG_TYPE_SETTINGS_TX_COMMIT) == 0 ||
+        strcmp(msg->command, GW_MSG_TYPE_SETTINGS_TX_ABORT) == 0 ||
+        strcmp(msg->command, GW_MSG_TYPE_SETTINGS_COMMIT_CONFIRM) == 0) {
+        return handle_settings_tx_command(msg);
+    }
+
+    ESP_LOGW(TAG, "unknown settings command: %s", msg->command);
+    send_ack(msg, &(device_cmd_response_t){ .success = false });
+    return -1;
+}
+
 /* ------------------------------------------------------------------ *
  * Public API
  * ------------------------------------------------------------------ */
@@ -539,6 +932,8 @@ int device_command_init(int (*notify_fn)(const uint8_t *, size_t))
     device_command_register("ping", cmd_ping_handler);
     device_command_register("get_info", cmd_get_info_handler);
     device_command_register("get_state", cmd_get_state_handler);
+    device_command_register(GW_COMMAND_DESCRIBE_SETTINGS, cmd_describe_settings_handler);
+    device_command_register(GW_COMMAND_READ_SETTINGS, cmd_read_settings_handler);
 
     ESP_LOGI(TAG, "initialized (%d built-in commands)", s_cmd.registry_count);
     return 0;

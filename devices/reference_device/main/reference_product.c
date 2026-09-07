@@ -31,6 +31,7 @@
 #include "device_command.h"
 #include "device_event.h"
 #include "device_feature.h"
+#include "reference_config.h"
 
 static const char *TAG = "ref_product";
 
@@ -246,6 +247,11 @@ static int ref_register_events(void)
     return 0;
 }
 
+static int ref_register_settings(void)
+{
+    return reference_config_register_settings();
+}
+
 static int ref_register_features(void)
 {
     const device_feature_config_t config = {
@@ -291,6 +297,8 @@ static const device_app_profile_t s_profile = {
     .register_commands = ref_register_commands,
     .register_features = ref_register_features,
     .register_events = ref_register_events,
+    .register_settings = ref_register_settings,
+    .settings_config_size = sizeof(reference_config_t),
 };
 
 const device_app_profile_t *reference_product_profile(void)

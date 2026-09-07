@@ -89,6 +89,11 @@ typedef struct {
     int (*register_commands)(void);
     int (*register_features)(void);
     int (*register_events)(void);
+
+    /* Settings v2 registration */
+    int (*register_settings)(void);
+    uint32_t settings_schema_revision;
+    size_t settings_config_size;
 } device_app_profile_t;
 
 /* ------------------------------------------------------------------ *
@@ -120,6 +125,18 @@ device_app_result_t device_app_get_status(device_app_status_t *out_status);
 
 /* Factory reset: clear bonds + resettable state (doc §90). */
 device_app_result_t device_app_factory_reset(void);
+
+/* Schedule a safe restart after delay_ms.
+ * Does NOT call esp_restart() directly — uses a FreeRTOS timer so the
+ * current BLE callback / notify task can unwind first.
+ * Multiple calls reset the timer to the latest delay. */
+device_app_result_t device_app_schedule_restart(uint32_t delay_ms);
+
+/* Cancel a previously scheduled restart (e.g. if new TX begins). */
+device_app_result_t device_app_cancel_restart(void);
+
+/* Check if a restart is currently scheduled. */
+bool device_app_is_restart_scheduled(void);
 
 #ifdef __cplusplus
 }
