@@ -298,7 +298,10 @@ static const device_app_profile_t s_profile = {
     .register_features = ref_register_features,
     .register_events = ref_register_events,
     .register_settings = ref_register_settings,
+    .settings_format_version = 1,
     .settings_config_size = sizeof(reference_config_t),
+    .settings_active_config = &g_reference_active_config,
+    .settings_staging_config = &g_reference_staging_config,
 };
 
 const device_app_profile_t *reference_product_profile(void)

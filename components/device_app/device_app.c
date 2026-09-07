@@ -66,6 +66,11 @@ static void restart_timer_cb(TimerHandle_t xTimer)
     /* unreachable */
 }
 
+static void settings_confirm_timer_cb(TimerHandle_t xTimer)
+{
+    device_settings_confirm_timeout_cb((void *)xTimer);
+}
+
 /* ------------------------------------------------------------------ *
  * BLE notify bridge (ble_peripheral -> device_command/device_event)
  * ------------------------------------------------------------------ */
@@ -135,12 +140,50 @@ device_app_result_t device_app_start(void)
         nvs_flash_init();
     }
 
-    /* Steps 3-5: storage, core, board_io — product-specific.
-     * Skipped in base framework; product callbacks handle these. */
+    /* Settings core must be initialized and bound before product registration.
+     * Product callbacks only register static descriptors and defaults. */
+    if (p->register_settings || p->settings_config_size > 0) {
+        if (p->settings_active_config == NULL ||
+            p->settings_staging_config == NULL ||
+            p->settings_config_size == 0) {
+            ESP_LOGE(TAG, "Settings profile has no valid storage binding");
+            return DEVICE_APP_ERR_INVALID_ARG;
+        }
+        ret = device_settings_init();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "device_settings_init failed: %d", ret);
+            return DEVICE_APP_ERR_STORAGE;
+        }
+        device_settings_storage_config_t settings_config = {
+            .config_size = p->settings_config_size,
+            .format_version = p->settings_format_version != 0 ?
+                              p->settings_format_version : 1,
+            .active_config = p->settings_active_config,
+            .staging_config = p->settings_staging_config,
+        };
+        ret = device_settings_configure(&settings_config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "device_settings_configure failed: %d", ret);
+            return DEVICE_APP_ERR_STORAGE;
+        }
+        if (p->register_settings) {
+            rc = p->register_settings();
+            if (rc != 0) {
+                ESP_LOGE(TAG, "register_settings failed: %d", rc);
+                return DEVICE_APP_ERR_PRODUCT;
+            }
+        }
+        ret = device_settings_freeze();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "device_settings_freeze failed: %d", ret);
+            return DEVICE_APP_ERR_STORAGE;
+        }
+        (void)device_settings_load();
+    }
 
-    /* Step 6: Product init. */
+    /* Product init consumes committed configuration after Settings load. */
     if (p->product_init) {
-        int rc = p->product_init();
+        rc = p->product_init();
         if (rc != 0) {
             ESP_LOGE(TAG, "product_init failed: %d", rc);
             return DEVICE_APP_ERR_PRODUCT;
@@ -155,40 +198,6 @@ device_app_result_t device_app_start(void)
     /* Step 8: semantic feature registry init. */
     rc = device_feature_init();
     if (rc != 0) return DEVICE_APP_ERR_PRODUCT;
-
-    /* Step 8.5: Settings v2 init (if configured). */
-    if (p->register_settings || p->settings_config_size > 0) {
-        /* Set config size and format version before init */
-        if (p->settings_config_size > 0) {
-            device_settings_set_config_size(p->settings_config_size);
-            device_settings_set_format_version(1);
-        }
-
-        rc = device_settings_init();
-        if (rc != ESP_OK) {
-            ESP_LOGE(TAG, "device_settings_init failed: %d", rc);
-            return DEVICE_APP_ERR_PRODUCT;
-        }
-
-        /* Register settings if callback provided */
-        if (p->register_settings) {
-            rc = p->register_settings();
-            if (rc != ESP_OK) {
-                ESP_LOGE(TAG, "register_settings failed: %d", rc);
-                return DEVICE_APP_ERR_PRODUCT;
-            }
-        }
-
-        /* Freeze registry */
-        rc = device_settings_freeze();
-        if (rc != ESP_OK) {
-            ESP_LOGE(TAG, "device_settings_freeze failed: %d", rc);
-            return DEVICE_APP_ERR_PRODUCT;
-        }
-
-        /* Load config from NVS */
-        device_settings_load();
-    }
 
     /* Step 9: device_command init. */
     rc = device_command_init(ble_notify_bridge);
@@ -269,7 +278,7 @@ device_app_result_t device_app_start(void)
                 pdMS_TO_TICKS(5000),  /* period — overwritten per-shot */
                 pdFALSE,              /* one-shot */
                 NULL,
-                device_settings_confirm_timeout_cb);
+                settings_confirm_timer_cb);
             if (s_confirm_timer == NULL) {
                 ESP_LOGE(TAG, "confirm timer create failed");
                 return DEVICE_APP_ERR_NO_RESOURCE;

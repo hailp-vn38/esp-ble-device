@@ -6,6 +6,7 @@
  */
 #include "device_settings.h"
 
+#include <stdint.h>
 #include <string.h>
 #include "esp_log.h"
 
@@ -18,6 +19,8 @@ static const char *TAG = "device_settings";
 static struct {
     const device_setting_descriptor_t *descriptors[DEVICE_SETTING_MAX_COUNT];
     size_t count;
+    bool initialized;
+    bool configured;
     bool frozen;
     uint32_t config_revision;
     size_t config_size;
@@ -38,9 +41,36 @@ static struct {
 esp_err_t device_settings_init(void)
 {
     memset(&s_registry, 0, sizeof(s_registry));
+    s_registry.initialized = true;
     s_registry.config_revision = 0;
     device_settings_tx_reset_state();
     ESP_LOGI(TAG, "initialized");
+    return ESP_OK;
+}
+
+esp_err_t device_settings_configure(
+    const device_settings_storage_config_t *config)
+{
+    if (!s_registry.initialized || config == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_registry.configured || s_registry.frozen) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (config->active_config == NULL || config->staging_config == NULL ||
+        config->active_config == config->staging_config ||
+        config->config_size < sizeof(device_settings_blob_header_t) ||
+        config->format_version == 0 ||
+        ((uintptr_t)config->active_config % _Alignof(device_settings_blob_header_t)) != 0 ||
+        ((uintptr_t)config->staging_config % _Alignof(device_settings_blob_header_t)) != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    s_registry.config_size = config->config_size;
+    s_registry.format_version = config->format_version;
+    s_registry.active_config = config->active_config;
+    s_registry.staging_config = config->staging_config;
+    s_registry.configured = true;
     return ESP_OK;
 }
 

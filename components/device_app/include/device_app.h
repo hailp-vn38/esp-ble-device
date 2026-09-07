@@ -93,7 +93,10 @@ typedef struct {
     /* Settings v2 registration */
     int (*register_settings)(void);
     uint32_t settings_schema_revision;
+    uint16_t settings_format_version;
     size_t settings_config_size;
+    void *settings_active_config;
+    void *settings_staging_config;
 } device_app_profile_t;
 
 /* ------------------------------------------------------------------ *

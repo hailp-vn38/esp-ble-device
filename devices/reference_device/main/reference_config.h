@@ -40,6 +40,9 @@ typedef struct {
     char serial_number[17];     /* READONLY — fixed at production */
 } reference_config_t;
 
+extern reference_config_t g_reference_active_config;
+extern reference_config_t g_reference_staging_config;
+
 /* ------------------------------------------------------------------ *
  * Settings registration
  * ------------------------------------------------------------------ */

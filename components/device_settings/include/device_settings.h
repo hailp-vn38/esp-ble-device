@@ -109,6 +109,14 @@ typedef struct {
     uint32_t config_revision;
 } device_settings_blob_header_t;
 
+/* Product-owned static storage bound once per boot after init. */
+typedef struct {
+    size_t config_size;
+    uint16_t format_version;
+    void *active_config;
+    void *staging_config;
+} device_settings_storage_config_t;
+
 /* ------------------------------------------------------------------ *
  * Transaction state
  * ------------------------------------------------------------------ */
@@ -131,8 +139,13 @@ typedef esp_err_t (*device_settings_validate_fn)(
  * Public API — Registry
  * ------------------------------------------------------------------ */
 
-/* Initialize the settings module. Must be called before register. */
+/* Initialize runtime state. Storage must be configured separately. */
 esp_err_t device_settings_init(void);
+
+/* Bind product-owned active/staging buffers and persisted format metadata.
+ * Must be called exactly once after init and before registration/freeze. */
+esp_err_t device_settings_configure(
+    const device_settings_storage_config_t *config);
 
 /* Register a setting descriptor. Only valid before freeze.
  * Returns ESP_ERR_INVALID_STATE if already frozen. */
@@ -217,10 +230,9 @@ esp_err_t device_settings_save(const void *config, size_t config_size,
 /* Set the product-level validation callback. */
 void device_settings_set_validate_fn(device_settings_validate_fn fn);
 
-/* Set the config blob size (must be called before init). */
+/* Legacy storage setters are internal compatibility helpers. New products
+ * must use device_settings_configure(). */
 void device_settings_set_config_size(size_t size);
-
-/* Set the format version (must be called before init). */
 void device_settings_set_format_version(uint16_t version);
 
 /* Get pointer to active config blob (header + product fields). */

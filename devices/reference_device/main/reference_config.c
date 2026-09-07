@@ -25,8 +25,8 @@ static const char *TAG = "ref_config";
  * Active / staging config instances
  * ------------------------------------------------------------------ */
 
-static reference_config_t s_active_config;
-static reference_config_t s_staging_config;
+reference_config_t g_reference_active_config;
+reference_config_t g_reference_staging_config;
 
 /* ------------------------------------------------------------------ *
  * Callback: read helpers
@@ -160,7 +160,7 @@ static const device_setting_descriptor_t s_settings[] = {
         .flags = 0,
         .read = read_bool,
         .stage = stage_bool,
-        .ctx = &s_staging_config,
+        .ctx = &g_reference_staging_config,
     },
     {
         .id = "sample_interval",
@@ -174,7 +174,7 @@ static const device_setting_descriptor_t s_settings[] = {
         .step = 1,
         .read = read_int_interval,
         .stage = stage_int_interval,
-        .ctx = &s_staging_config,
+        .ctx = &g_reference_staging_config,
     },
     {
         .id = "target_temperature",
@@ -188,7 +188,7 @@ static const device_setting_descriptor_t s_settings[] = {
         .step = 1,
         .read = read_int_temp,
         .stage = stage_int_temp,
-        .ctx = &s_staging_config,
+        .ctx = &g_reference_staging_config,
     },
     {
         .id = "fan_mode",
@@ -201,7 +201,7 @@ static const device_setting_descriptor_t s_settings[] = {
         .option_count = 3,
         .read = read_enum_fan,
         .stage = stage_enum_fan,
-        .ctx = &s_staging_config,
+        .ctx = &g_reference_staging_config,
     },
     {
         .id = "device_label",
@@ -213,7 +213,7 @@ static const device_setting_descriptor_t s_settings[] = {
         .max_length = 32,
         .read = read_string_label,
         .stage = stage_string_label,
-        .ctx = &s_staging_config,
+        .ctx = &g_reference_staging_config,
     },
     {
         .id = "admin_token",
@@ -225,7 +225,7 @@ static const device_setting_descriptor_t s_settings[] = {
         .max_length = 32,
         .read = read_secret_token,
         .stage = stage_secret_token,
-        .ctx = &s_staging_config,
+        .ctx = &g_reference_staging_config,
     },
     {
         .id = "serial_number",
@@ -237,7 +237,7 @@ static const device_setting_descriptor_t s_settings[] = {
         .max_length = 16,
         .read = read_string_serial,
         .stage = NULL,
-        .ctx = &s_staging_config,
+        .ctx = &g_reference_staging_config,
     },
 };
 
@@ -299,12 +299,12 @@ int reference_config_register_settings(void)
 
 reference_config_t *reference_config_get_active(void)
 {
-    return &s_active_config;
+    return &g_reference_active_config;
 }
 
 reference_config_t *reference_config_get_staging(void)
 {
-    return &s_staging_config;
+    return &g_reference_staging_config;
 }
 
 void reference_config_apply_defaults(reference_config_t *cfg)

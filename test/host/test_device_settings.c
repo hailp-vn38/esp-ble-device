@@ -226,6 +226,31 @@ static void test_registry_init(void)
     CHECK_INT(device_settings_init(), ESP_OK);
 }
 
+static void test_storage_configuration(void)
+{
+    device_settings_storage_config_t config = {
+        .config_size = sizeof(test_config_t),
+        .format_version = 1,
+        .active_config = &s_active_config,
+        .staging_config = &s_staging_config,
+    };
+
+    CHECK_INT(device_settings_configure(&config), ESP_ERR_INVALID_STATE);
+    CHECK_INT(device_settings_init(), ESP_OK);
+    CHECK_INT(device_settings_configure(&config), ESP_OK);
+    CHECK_INT(device_settings_configure(&config), ESP_ERR_INVALID_STATE);
+
+    device_settings_init();
+    config.active_config = NULL;
+    CHECK_INT(device_settings_configure(&config), ESP_ERR_INVALID_ARG);
+    config.active_config = &s_active_config;
+    config.staging_config = &s_active_config;
+    CHECK_INT(device_settings_configure(&config), ESP_ERR_INVALID_ARG);
+    config.staging_config = &s_staging_config;
+    config.config_size = sizeof(device_settings_blob_header_t) - 1;
+    CHECK_INT(device_settings_configure(&config), ESP_ERR_INVALID_ARG);
+}
+
 static void test_registry_register(void)
 {
     CHECK_INT(device_settings_register(&s_settings[0]), ESP_OK);
@@ -694,6 +719,7 @@ static void test_cross_field_validation(void)
 
 int main(void)
 {
+    test_storage_configuration();
     test_registry_init();
     test_registry_register();
     test_registry_duplicate_id();
