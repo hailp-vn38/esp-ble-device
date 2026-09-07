@@ -1,4 +1,5 @@
 #include "demo_product.h"
+#include "demo_config.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -19,6 +20,8 @@ static const char *TAG = "demo_product";
 static bool s_relay, s_plug, s_light, s_contact;
 static int32_t s_dimmer, s_fan, s_temperature = 250, s_humidity = 55;
 static int32_t s_dryer_temperature = 300, s_drying_time = 1;
+static bool demo_sensor_enabled(void *ctx) { return ((demo_config_t *)ctx)->sensor_enabled; }
+static uint32_t demo_sensor_interval(void *ctx) { return (uint32_t)((demo_config_t *)ctx)->sample_interval_s * 1000u; }
 
 static void publish_bool(const char *id, uint8_t property, bool value)
 {
@@ -151,13 +154,16 @@ static int register_commands(void)
 static int product_init(void)
 {
     if (demo_gpio_output_init(DEMO_RELAY_GPIO,false) || demo_gpio_output_init(DEMO_PLUG_GPIO,false) || demo_gpio_output_init(DEMO_LIGHT_GPIO,false) || demo_pwm_init(DEMO_DIMMER_PWM_GPIO,0) || demo_pwm_init(DEMO_FAN_PWM_GPIO,1)) return -1;
-    if (demo_input_init(DEMO_BUTTON_GPIO, local_button, NULL) != 0 || demo_sensor_start(sensor_sample, NULL) != 0) return -1;
+    s_dryer_temperature = g_demo_active_config.startup_dryer_temp_c * 10;
+    s_fan = g_demo_active_config.startup_fan_mode == DEMO_FAN_MODE_OFF ? 0 : g_demo_active_config.startup_fan_percent;
+    if (demo_input_init(DEMO_BUTTON_GPIO, local_button, NULL) != 0 || demo_sensor_start(sensor_sample, NULL, demo_sensor_interval, demo_sensor_enabled, &g_demo_active_config) != 0) return -1;
     if (gpio_set_direction(DEMO_CONTACT_GPIO, GPIO_MODE_INPUT) != ESP_OK) return -1;
     return 0;
 }
 static int product_start(void) { ESP_LOGI(TAG, "started: 7 tools, 10 features"); return 0; }
 static int product_stop(void) { return 0; }
 static int register_events(void) { return 0; }
+static int register_settings(void) { return demo_config_register_settings(); }
 
 static const device_app_profile_t s_profile = {
     .model="esp32s3-demo", .hardware_version="1.0", .firmware_version="0.3.0",
@@ -165,5 +171,8 @@ static const device_app_profile_t s_profile = {
     .supports_factory_reset=true, .supports_telemetry=true, .supports_local_button=true,
     .product_init=product_init, .product_start=product_start, .product_stop=product_stop,
     .register_commands=register_commands, .register_features=register_features, .register_events=register_events,
+    .register_settings=register_settings, .settings_format_version=1, .settings_config_size=sizeof(demo_config_t),
+    .settings_active_config=&g_demo_active_config, .settings_staging_config=&g_demo_staging_config,
+    .settings_defaults_fn=demo_config_defaults, .settings_validate_fn=demo_config_validate,
 };
 const device_app_profile_t *demo_product_profile(void) { return &s_profile; }

@@ -128,7 +128,7 @@ static void setup_test_env(void)
 static void test_discovery_count(void)
 {
     setup_test_env();
-    CHECK_INT(device_settings_count(), 7);
+    CHECK_INT(device_settings_count(), 6);
 }
 
 static void test_discovery_sensor_enabled(void)
@@ -194,15 +194,10 @@ static void test_discovery_device_label(void)
     CHECK(desc->flags == 0);
 }
 
-static void test_discovery_admin_token_secret(void)
+static void test_secret_not_registered(void)
 {
     setup_test_env();
-    const device_setting_descriptor_t *desc = device_settings_find("admin_token");
-    CHECK(desc != NULL);
-    CHECK_INT(desc->type, DEVICE_SETTING_STRING);
-    CHECK_STR(desc->title, "Admin Token");
-    CHECK_STR(desc->group, "security");
-    CHECK(desc->flags & DEVICE_SETTING_FLAG_SECRET);
+    CHECK(device_settings_find("admin_token") == NULL);
 }
 
 static void test_discovery_serial_number_readonly(void)
@@ -273,30 +268,6 @@ static void test_read_string(void)
     CHECK_STR(val, "TestLabel");
 }
 
-static void test_read_secret_configured(void)
-{
-    setup_test_env();
-    reference_config_t *staging = reference_config_get_staging();
-    staging->admin_token_set = true;
-
-    const device_setting_descriptor_t *desc = device_settings_find("admin_token");
-    device_setting_secret_value_t secret = { 0 };
-    CHECK_INT(desc->read(desc->ctx, &secret), ESP_OK);
-    CHECK(secret.configured == true);
-}
-
-static void test_read_secret_not_configured(void)
-{
-    setup_test_env();
-    reference_config_t *staging = reference_config_get_staging();
-    staging->admin_token_set = false;
-
-    const device_setting_descriptor_t *desc = device_settings_find("admin_token");
-    device_setting_secret_value_t secret = { .configured = true };
-    CHECK_INT(desc->read(desc->ctx, &secret), ESP_OK);
-    CHECK(secret.configured == false);
-}
-
 /* ------------------------------------------------------------------ *
  * Tests: Stage callbacks (write)
  * ------------------------------------------------------------------ */
@@ -344,17 +315,6 @@ static void test_stage_enum(void)
     CHECK_INT(staging->fan_mode, 1);
 }
 
-static void test_stage_secret(void)
-{
-    setup_test_env();
-    const device_setting_descriptor_t *desc = device_settings_find("admin_token");
-    CHECK_INT(desc->stage(desc->ctx, "my-secret-token"), ESP_OK);
-
-    reference_config_t *staging = reference_config_get_staging();
-    CHECK(staging->admin_token_set == true);
-    CHECK(strcmp(staging->admin_token_hash, "hashed") == 0);
-}
-
 /* ------------------------------------------------------------------ *
  * Tests: READONLY rejects write
  * ------------------------------------------------------------------ */
@@ -374,27 +334,6 @@ static void test_readonly_rejects_write(void)
                                            "HACKED");
     CHECK_INT(err, ESP_ERR_INVALID_STATE);
     device_settings_tx_abort(0xF00);
-}
-
-/* ------------------------------------------------------------------ *
- * Tests: SECRET read never returns plaintext
- * ------------------------------------------------------------------ */
-
-static void test_secret_never_plaintext(void)
-{
-    setup_test_env();
-    reference_config_t *staging = reference_config_get_staging();
-    strlcpy(staging->admin_token_hash, "supersecret123",
-            sizeof(staging->admin_token_hash));
-    staging->admin_token_set = true;
-
-    const device_setting_descriptor_t *desc = device_settings_find("admin_token");
-    device_setting_secret_value_t secret = { 0 };
-    CHECK_INT(desc->read(desc->ctx, &secret), ESP_OK);
-
-    /* configured must be true, but no plaintext accessible via read */
-    CHECK(secret.configured == true);
-    /* The struct has no plaintext field — only .configured */
 }
 
 /* ------------------------------------------------------------------ *
@@ -420,8 +359,6 @@ static void test_transaction_all_writable_types(void)
 
     CHECK_INT(device_settings_tx_set("device_label", DEVICE_SETTING_STRING, "Changed"), ESP_OK);
 
-    CHECK_INT(device_settings_tx_set("admin_token", DEVICE_SETTING_STRING, "token123"), ESP_OK);
-
     uint32_t new_rev = 0;
     CHECK_INT(device_settings_tx_commit(0xF01, &new_rev), ESP_OK);
     CHECK_INT(new_rev, 2);
@@ -433,7 +370,7 @@ static void test_transaction_all_writable_types(void)
     CHECK_INT(active->target_temperature, 90);
     CHECK_INT(active->fan_mode, 0);
     CHECK_STR(active->device_label, "Changed");
-    CHECK(active->admin_token_set == true);
+    CHECK(active->admin_token_set == false);
 
     /* serial_number unchanged */
     CHECK_STR(active->serial_number, REFERENCE_CONFIG_DEFAULT_SERIAL_NUMBER);
@@ -581,7 +518,7 @@ static void test_no_product_leakage(void)
 
     /* Verify generic API works without product-specific knowledge */
     setup_test_env();
-    CHECK_INT(device_settings_count(), 7);
+    CHECK_INT(device_settings_count(), 6);
 
     /* All settings found by generic ID strings */
     CHECK(device_settings_find("sensor_enabled") != NULL);
@@ -589,7 +526,7 @@ static void test_no_product_leakage(void)
     CHECK(device_settings_find("target_temperature") != NULL);
     CHECK(device_settings_find("fan_mode") != NULL);
     CHECK(device_settings_find("device_label") != NULL);
-    CHECK(device_settings_find("admin_token") != NULL);
+    CHECK(device_settings_find("admin_token") == NULL);
     CHECK(device_settings_find("serial_number") != NULL);
 
     /* Non-existent setting not found */
@@ -609,7 +546,7 @@ int main(void)
     test_discovery_target_temperature();
     test_discovery_fan_mode();
     test_discovery_device_label();
-    test_discovery_admin_token_secret();
+    test_secret_not_registered();
     test_discovery_serial_number_readonly();
 
     /* Defaults */
@@ -619,21 +556,15 @@ int main(void)
     test_read_bool();
     test_read_int();
     test_read_string();
-    test_read_secret_configured();
-    test_read_secret_not_configured();
 
     /* Stage callbacks */
     test_stage_bool();
     test_stage_int();
     test_stage_string();
     test_stage_enum();
-    test_stage_secret();
 
     /* READONLY */
     test_readonly_rejects_write();
-
-    /* SECRET */
-    test_secret_never_plaintext();
 
     /* Transaction */
     test_transaction_all_writable_types();

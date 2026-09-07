@@ -67,14 +67,15 @@ static esp_err_t read_string_label(void *ctx, void *out)
     return ESP_OK;
 }
 
+#if defined(REFERENCE_ENABLE_EXPERIMENTAL_SECRET)
 static esp_err_t read_secret_token(void *ctx, void *out)
 {
     reference_config_t *cfg = (reference_config_t *)ctx;
     device_setting_secret_value_t *secret = (device_setting_secret_value_t *)out;
     secret->configured = cfg->admin_token_set;
-    /* Never return plaintext — only configured status */
     return ESP_OK;
 }
+#endif
 
 static esp_err_t read_string_serial(void *ctx, void *out)
 {
@@ -123,16 +124,17 @@ static esp_err_t stage_string_label(void *ctx, const void *value)
     return ESP_OK;
 }
 
+#if defined(REFERENCE_ENABLE_EXPERIMENTAL_SECRET)
 static esp_err_t stage_secret_token(void *ctx, const void *value)
 {
     (void)value;
     reference_config_t *cfg = (reference_config_t *)ctx;
-    /* Simulate: mark as configured, store a fake hash. */
     cfg->admin_token_set = true;
     strlcpy(cfg->admin_token_hash, "hashed", sizeof(cfg->admin_token_hash));
     ESP_LOGI(TAG, "admin_token set (hashed)");
     return ESP_OK;
 }
+#endif
 
 /* serial_number: no stage callback — readonly, cannot be written. */
 
@@ -225,6 +227,7 @@ static const device_setting_descriptor_t s_settings[] = {
         .stage_ctx = &g_reference_staging_config,
         .ctx = &g_reference_staging_config,
     },
+#if defined(REFERENCE_ENABLE_EXPERIMENTAL_SECRET)
     {
         .id = "admin_token",
         .title = "Admin Token",
@@ -239,6 +242,7 @@ static const device_setting_descriptor_t s_settings[] = {
         .stage_ctx = &g_reference_staging_config,
         .ctx = &g_reference_staging_config,
     },
+#endif
     {
         .id = "serial_number",
         .title = "Serial Number",
