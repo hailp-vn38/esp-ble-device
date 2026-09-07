@@ -126,6 +126,19 @@ void device_settings_tx_set_confirm_timer(void *timer)
     s_tx.timer_handle = timer;
 }
 
+void device_settings_tx_arm_confirm_timeout(void)
+{
+#if !defined(GW_HOST_TEST) && defined(ESP_PLATFORM)
+    if (s_tx.timer_handle != NULL &&
+        s_tx.state == DEVICE_SETTINGS_TX_COMMITTED_WAIT_CONFIRM) {
+        xTimerStop((TimerHandle_t)s_tx.timer_handle, 0);
+        xTimerChangePeriod((TimerHandle_t)s_tx.timer_handle,
+                           pdMS_TO_TICKS(CONFIRM_TIMEOUT_MS), 0);
+        xTimerReset((TimerHandle_t)s_tx.timer_handle, 0);
+    }
+#endif
+}
+
 esp_err_t device_settings_tx_begin(uint64_t transaction_id,
                                    uint32_t expected_revision)
 {
@@ -370,29 +383,35 @@ device_settings_tx_state_t device_settings_tx_get_state(void)
     return s_tx.state;
 }
 
-esp_err_t device_settings_tx_confirm_and_restart(void)
+esp_err_t device_settings_tx_validate_confirm(uint64_t transaction_id,
+                                              uint32_t revision)
 {
     if (s_tx.state != DEVICE_SETTINGS_TX_COMMITTED_WAIT_CONFIRM) {
-        ESP_LOGW(TAG, "confirm: not in committed_wait_confirm state");
         return ESP_ERR_INVALID_STATE;
     }
+    if (transaction_id != s_tx.last_committed_tx_id ||
+        revision != s_tx.last_committed_revision) {
+        return ESP_ERR_INVALID_VERSION;
+    }
+    return ESP_OK;
+}
 
-    /* Phase 4: record confirm, transition to RESTART_PENDING, schedule restart */
-    ESP_LOGI(TAG, "confirm: tx_id=0x%llX, revision=%lu — scheduling restart",
-             (unsigned long long)s_tx.last_committed_tx_id,
-             (unsigned long)s_tx.last_committed_revision);
-
+esp_err_t device_settings_tx_confirm(uint64_t transaction_id,
+                                     uint32_t revision)
+{
+    esp_err_t err = device_settings_tx_validate_confirm(transaction_id, revision);
+    if (err != ESP_OK) return err;
     confirm_timer_stop();
     s_tx.state = DEVICE_SETTINGS_TX_RESTART_PENDING;
-
-    /* Schedule restart after short grace period (allows ACK to be delivered). */
-    esp_err_t err = device_app_schedule_restart(500);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "confirm: schedule_restart failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
     return ESP_OK;
+}
+
+esp_err_t device_settings_tx_confirm_and_restart(void)
+{
+    esp_err_t err = device_settings_tx_confirm(
+        s_tx.last_committed_tx_id, s_tx.last_committed_revision);
+    if (err != ESP_OK) return err;
+    return device_app_schedule_restart(500);
 }
 
 /* ------------------------------------------------------------------ *

@@ -828,6 +828,10 @@ static int handle_settings_tx_command(const gw_message_t *msg)
 
     esp_err_t err = ESP_OK;
     device_cmd_response_t response = { 0 };
+    bool arm_confirm_timeout = false;
+    bool schedule_restart = false;
+    uint64_t confirm_tx_id = 0;
+    uint32_t confirm_revision = 0;
 
     switch (cmd.cmd_type) {
     case GW_SETTINGS_CMD_TX_BEGIN: {
@@ -891,6 +895,7 @@ static int handle_settings_tx_command(const gw_message_t *msg)
         if (err == ESP_OK) {
             /* ACK carries new_revision after commit. */
             response.int_value = (int)new_revision;
+            arm_confirm_timeout = true;
         }
         break;
     }
@@ -904,19 +909,15 @@ static int handle_settings_tx_command(const gw_message_t *msg)
         break;
     }
     case GW_SETTINGS_CMD_TX_CONFIRM: {
-        if (!cmd.has_transaction_id) {
+        if (!cmd.has_transaction_id || !cmd.has_new_revision) {
             err = ESP_ERR_INVALID_ARG;
             break;
         }
-        /* Verify revision if provided (idempotent — same revision = OK). */
-        if (cmd.has_new_revision) {
-            uint32_t current_rev = device_settings_get_revision();
-            if (cmd.new_revision != current_rev) {
-                err = ESP_ERR_INVALID_VERSION;
-                break;
-            }
-        }
-        err = device_settings_tx_confirm_and_restart();
+        err = device_settings_tx_validate_confirm(cmd.transaction_id,
+                                                  cmd.new_revision);
+        confirm_tx_id = cmd.transaction_id;
+        confirm_revision = cmd.new_revision;
+        schedule_restart = (err == ESP_OK);
         break;
     }
     default:
@@ -935,6 +936,15 @@ static int handle_settings_tx_command(const gw_message_t *msg)
     }
 
     send_ack(msg, &response);
+    if (err == ESP_OK && arm_confirm_timeout) {
+        device_settings_tx_arm_confirm_timeout();
+    }
+    if (err == ESP_OK && schedule_restart) {
+        err = device_settings_tx_confirm(confirm_tx_id, confirm_revision);
+        if (err == ESP_OK && s_cmd.restart_fn != NULL) {
+            (void)s_cmd.restart_fn(500);
+        }
+    }
     return (err == ESP_OK) ? 0 : -1;
 }
 

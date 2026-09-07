@@ -230,8 +230,14 @@ esp_err_t device_settings_tx_abort(uint64_t transaction_id);
 /* Get the current transaction state. */
 device_settings_tx_state_t device_settings_tx_get_state(void);
 
-/* Confirm commit and trigger reboot.
- * Must be called after COMMITTED_WAIT_CONFIRM state. */
+/* Validate commit confirmation and transition to restart-pending.
+ * Restart orchestration is owned by device_command/device_app. */
+esp_err_t device_settings_tx_validate_confirm(uint64_t transaction_id,
+                                              uint32_t revision);
+esp_err_t device_settings_tx_confirm(uint64_t transaction_id,
+                                     uint32_t revision);
+
+/* Legacy wrapper; validates the last committed transaction. */
 esp_err_t device_settings_tx_confirm_and_restart(void);
 
 /* Called by BLE layer on disconnect. If in COMMITTED_WAIT_CONFIRM,
@@ -287,6 +293,7 @@ typedef enum {
 
 /* Set the confirm timeout timer handle (created by device_app). */
 void device_settings_tx_set_confirm_timer(void *timer);
+void device_settings_tx_arm_confirm_timeout(void);
 
 /* Confirm timeout callback for use with FreeRTOS timer creation. */
 void device_settings_confirm_timeout_cb(void *arg);
