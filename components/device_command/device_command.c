@@ -127,11 +127,6 @@ static device_cmd_result_t cmd_get_info_handler(
     const gw_message_t *request, device_cmd_response_t *response);
 static device_cmd_result_t cmd_get_state_handler(
     const gw_message_t *request, device_cmd_response_t *response);
-static device_cmd_result_t cmd_describe_settings_handler(
-    const gw_message_t *request, device_cmd_response_t *response);
-static device_cmd_result_t cmd_read_settings_handler(
-    const gw_message_t *request, device_cmd_response_t *response);
-
 /* Settings v2 command handling (Phase 0). */
 static int handle_settings_command(const gw_message_t *msg);
 
@@ -193,6 +188,12 @@ static void init_capability_message(gw_message_t *message,
             sizeof(message->command));
     message->snapshot_id = snapshot_id;
     message->has_snapshot_id = 1;
+    if (device_settings_is_supported()) {
+        message->settings_supported = 1;
+        message->has_settings_supported = 1;
+        message->settings_schema_revision = 1;
+        message->has_settings_schema_revision = 1;
+    }
 }
 
 static int send_capability_message(uint8_t storage[GW_MSG_MAX_LEN],
@@ -551,26 +552,6 @@ static device_cmd_result_t cmd_get_state_handler(
     const gw_message_t *request, device_cmd_response_t *response)
 {
     response->success = true;
-    response->int_value = 0;
-    return DEVICE_CMD_OK;
-}
-
-static device_cmd_result_t cmd_describe_settings_handler(
-    const gw_message_t *request, device_cmd_response_t *response)
-{
-    /* Stub: actual settings description will be implemented in Phase 2.
-     * For now, respond with success=false to indicate unsupported. */
-    response->success = false;
-    response->int_value = 0;
-    return DEVICE_CMD_OK;
-}
-
-static device_cmd_result_t cmd_read_settings_handler(
-    const gw_message_t *request, device_cmd_response_t *response)
-{
-    /* Stub: actual settings values will be implemented in Phase 2.
-     * For now, respond with success=false to indicate unsupported. */
-    response->success = false;
     response->int_value = 0;
     return DEVICE_CMD_OK;
 }
@@ -992,8 +973,6 @@ int device_command_init(int (*notify_fn)(const uint8_t *, size_t))
     device_command_register("ping", cmd_ping_handler);
     device_command_register("get_info", cmd_get_info_handler);
     device_command_register("get_state", cmd_get_state_handler);
-    device_command_register(GW_COMMAND_DESCRIBE_SETTINGS, cmd_describe_settings_handler);
-    device_command_register(GW_COMMAND_READ_SETTINGS, cmd_read_settings_handler);
 
     ESP_LOGI(TAG, "initialized (%d built-in commands)", s_cmd.registry_count);
     return 0;

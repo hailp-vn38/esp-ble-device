@@ -140,6 +140,13 @@ size_t device_settings_count(void)
     return s_registry.count;
 }
 
+bool device_settings_is_supported(void)
+{
+    return s_registry.initialized && s_registry.configured &&
+           s_registry.frozen && s_registry.active_config != NULL &&
+           s_registry.staging_config != NULL;
+}
+
 const device_setting_descriptor_t *device_settings_get(size_t index)
 {
     if (index >= s_registry.count) return NULL;

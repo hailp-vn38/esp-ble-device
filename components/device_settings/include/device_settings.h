@@ -185,6 +185,7 @@ esp_err_t device_settings_freeze(void);
 
 /* Get the number of registered settings. */
 size_t device_settings_count(void);
+bool device_settings_is_supported(void);
 
 /* Get a setting descriptor by index. */
 const device_setting_descriptor_t *device_settings_get(size_t index);
