@@ -71,6 +71,12 @@ typedef struct {
     device_feature_value_t value;
 } device_cmd_feature_state_t;
 
+typedef enum {
+    DEVICE_CMD_EVENT_RX_FRAME = 0,
+    DEVICE_CMD_EVENT_SETTINGS_DISCONNECT,
+    DEVICE_CMD_EVENT_SETTINGS_TIMEOUT,
+} device_cmd_event_type_t;
+
 typedef struct {
     bool success;
     int int_value;
@@ -132,6 +138,9 @@ int device_command_register_capability(
     device_cmd_handler_t handler);
 int device_command_freeze(void);
 int device_command_submit(const uint8_t *data, size_t len);
+int device_command_post_internal_event(device_cmd_event_type_t type,
+                                        uint32_t generation);
+void device_command_set_restart_fn(int (*fn)(uint32_t delay_ms));
 int device_command_complete(const gw_message_t *request,
                             const device_cmd_response_t *response);
 

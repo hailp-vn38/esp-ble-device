@@ -63,8 +63,10 @@ static const char *TAG = "device_command";
  * ------------------------------------------------------------------ */
 
 typedef struct {
-    uint8_t data[GW_MSG_MAX_LEN];
+    uint8_t type;
     uint16_t len;
+    uint32_t generation;
+    uint8_t data[GW_MSG_MAX_LEN];
 } cmd_rx_msg_t;
 
 /* ------------------------------------------------------------------ *
@@ -111,6 +113,8 @@ static struct {
     bool has_device_id;
     uint32_t capability_revision;
     uint32_t next_snapshot_id;
+    uint32_t settings_generation;
+    int (*restart_fn)(uint32_t delay_ms);
 } s_cmd;
 
 /* ------------------------------------------------------------------ *
@@ -421,6 +425,17 @@ static void cmd_worker(void *arg)
     while (1) {
         if (xQueueReceive(s_cmd.rx_queue, &rx, portMAX_DELAY) != pdTRUE)
             continue;
+
+        if (rx.type == DEVICE_CMD_EVENT_SETTINGS_DISCONNECT) {
+            device_settings_tx_on_disconnect();
+            continue;
+        }
+        if (rx.type == DEVICE_CMD_EVENT_SETTINGS_TIMEOUT) {
+            if (rx.generation == s_cmd.settings_generation) {
+                device_settings_confirm_timeout_cb(NULL);
+            }
+            continue;
+        }
 
         /* Decode CBOR (strict, per gateway_protocol contract). */
         gw_message_t msg;
@@ -830,9 +845,9 @@ static int handle_settings_tx_command(const gw_message_t *msg)
             break;
         }
         if (err == ESP_OK) {
-            err = device_settings_tx_set(cmd.setting_id,
-                                         (device_setting_type_t)cmd.setting_value.type,
-                                         value_ptr);
+            err = device_settings_tx_set_with_id(
+                cmd.transaction_id, cmd.setting_id,
+                (device_setting_type_t)cmd.setting_value.type, value_ptr);
         }
         break;
     }
@@ -1026,12 +1041,26 @@ int device_command_freeze(void)
     return 0;
 }
 
+int device_command_post_internal_event(device_cmd_event_type_t type,
+                                        uint32_t generation)
+{
+    if (s_cmd.rx_queue == NULL || type == DEVICE_CMD_EVENT_RX_FRAME) return -1;
+    cmd_rx_msg_t event = { .type = (uint8_t)type, .generation = generation };
+    return xQueueSend(s_cmd.rx_queue, &event, 0) == pdTRUE ? 0 : -1;
+}
+
+void device_command_set_restart_fn(int (*fn)(uint32_t delay_ms))
+{
+    s_cmd.restart_fn = fn;
+}
+
 int device_command_submit(const uint8_t *data, size_t len)
 {
     if (data == NULL || len == 0 || len > GW_MSG_MAX_LEN) return -1;
     if (s_cmd.rx_queue == NULL) return -1;
 
-    cmd_rx_msg_t rx = { .len = (uint16_t)len };
+    cmd_rx_msg_t rx = { .type = DEVICE_CMD_EVENT_RX_FRAME,
+                        .len = (uint16_t)len };
     memcpy(rx.data, data, len);
 
     if (xQueueSend(s_cmd.rx_queue, &rx, 0) != pdTRUE) {

@@ -716,11 +716,9 @@ static void test_disconnect_before_commit(void)
     setup_test_env();
     CHECK_INT(device_settings_tx_begin(0xE03, 1), ESP_OK);
 
-    /* Simulate disconnect during ACTIVE — should just abort */
+    /* Simulate disconnect during ACTIVE — abort and discard staging. */
     device_settings_tx_on_disconnect();
-    CHECK_INT(device_settings_tx_get_state(), DEVICE_SETTINGS_TX_ACTIVE);
-
-    device_settings_tx_abort(0xE03);
+    CHECK_INT(device_settings_tx_get_state(), DEVICE_SETTINGS_TX_IDLE);
 }
 
 /* 5.5: Idempotent: last_committed fields after commit */

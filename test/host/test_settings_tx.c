@@ -279,9 +279,9 @@ static void test_begin_duplicate_same_tx_id(void)
 {
     setup_test_env();
     CHECK_INT(device_settings_tx_begin(0x102, 1), ESP_OK);
-    /* Second BEGIN with same tx_id — should fail (tx already active) */
+    /* Same BEGIN is an idempotent retry. */
     esp_err_t err = device_settings_tx_begin(0x102, 1);
-    CHECK_INT(err, ESP_ERR_INVALID_STATE);
+    CHECK_INT(err, ESP_OK);
     device_settings_tx_abort(0x102);
 }
 

@@ -389,11 +389,10 @@ static void test_disconnect_active_noop(void)
 {
     setup_test_env();
     CHECK_INT(device_settings_tx_begin(0xA05, 1), ESP_OK);
-    /* Still in ACTIVE state — disconnect should not schedule restart */
+    /* ACTIVE disconnect aborts staging without scheduling restart. */
     device_settings_tx_on_disconnect();
     CHECK(!g_restart_scheduled);
-    CHECK_INT(device_settings_tx_get_state(), DEVICE_SETTINGS_TX_ACTIVE);
-    device_settings_tx_abort(0xA05);
+    CHECK_INT(device_settings_tx_get_state(), DEVICE_SETTINGS_TX_IDLE);
 }
 
 /* ------------------------------------------------------------------ *

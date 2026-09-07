@@ -97,7 +97,8 @@ static void ble_state_callback(ble_peripheral_state_t state)
                           s_prev_ble_state == BLE_PERIPH_READY);
 
     if (state == BLE_PERIPH_ADVERTISING && was_connected) {
-        device_settings_tx_on_disconnect();
+        (void)device_command_post_internal_event(
+            DEVICE_CMD_EVENT_SETTINGS_DISCONNECT, 0);
     }
 
     s_prev_ble_state = state;
@@ -207,6 +208,7 @@ device_app_result_t device_app_start(void)
     if (rc != 0) return DEVICE_APP_ERR_COMMAND;
     device_command_set_capability_revision(
         p->capability_revision != 0 ? p->capability_revision : 1);
+    device_command_set_restart_fn((int (*)(uint32_t))device_app_schedule_restart);
 
     /* Step 10-11: register common + product commands. */
     if (p->register_commands) {

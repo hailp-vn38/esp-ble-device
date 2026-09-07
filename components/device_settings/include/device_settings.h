@@ -205,9 +205,13 @@ uint32_t device_settings_get_revision(void);
 esp_err_t device_settings_tx_begin(uint64_t transaction_id,
                                    uint32_t expected_revision);
 
-/* Set a single setting value during an active transaction.
- * Validates type, range, and calls the stage callback.
- * Returns ESP_ERR_INVALID_STATE if no transaction is active. */
+/* Set a single setting value with an explicit transaction ID. */
+esp_err_t device_settings_tx_set_with_id(uint64_t transaction_id,
+                                         const char *setting_id,
+                                         device_setting_type_t type,
+                                         const void *value);
+
+/* Legacy wrapper; new command paths must use tx_set_with_id(). */
 esp_err_t device_settings_tx_set(const char *setting_id,
                                  device_setting_type_t type,
                                  const void *value);

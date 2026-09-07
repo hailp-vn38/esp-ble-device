@@ -85,22 +85,6 @@ void device_settings_confirm_timeout_cb(void *arg)
     }
 }
 
-/* Start the confirm timeout timer (called after COMMIT succeeds). */
-static void confirm_timer_start(void)
-{
-#if !defined(GW_HOST_TEST) && defined(ESP_PLATFORM)
-    if (s_tx.timer_handle != NULL) {
-        xTimerStop((TimerHandle_t)s_tx.timer_handle, 0);
-        xTimerChangePeriod((TimerHandle_t)s_tx.timer_handle,
-                           pdMS_TO_TICKS(CONFIRM_TIMEOUT_MS), 0);
-        xTimerReset((TimerHandle_t)s_tx.timer_handle, 0);
-        ESP_LOGI(TAG, "confirm timer started (%d ms)", CONFIRM_TIMEOUT_MS);
-    }
-#else
-    (void)0; /* host tests: no timer */
-#endif
-}
-
 /* Stop the confirm timeout timer (called on confirm, abort, disconnect). */
 static void confirm_timer_stop(void)
 {
@@ -145,7 +129,14 @@ void device_settings_tx_set_confirm_timer(void *timer)
 esp_err_t device_settings_tx_begin(uint64_t transaction_id,
                                    uint32_t expected_revision)
 {
-    /* Reject if another transaction is active */
+    if (transaction_id == 0) return ESP_ERR_INVALID_ARG;
+
+    /* Retry of the same active BEGIN is idempotent. */
+    if (s_tx.state == DEVICE_SETTINGS_TX_ACTIVE) {
+        if (s_tx.transaction_id == transaction_id &&
+            s_tx.expected_revision == expected_revision) return ESP_OK;
+        return ESP_ERR_INVALID_STATE;
+    }
     if (s_tx.state != DEVICE_SETTINGS_TX_IDLE) {
         ESP_LOGW(TAG, "begin: transaction already active (state=%d)", s_tx.state);
         return ESP_ERR_INVALID_STATE;
@@ -182,16 +173,18 @@ esp_err_t device_settings_tx_begin(uint64_t transaction_id,
     return ESP_OK;
 }
 
-esp_err_t device_settings_tx_set(const char *setting_id,
-                                 device_setting_type_t type,
-                                 const void *value)
+esp_err_t device_settings_tx_set_with_id(uint64_t transaction_id,
+                                         const char *setting_id,
+                                         device_setting_type_t type,
+                                         const void *value)
 {
     if (s_tx.state != DEVICE_SETTINGS_TX_ACTIVE) {
         ESP_LOGW(TAG, "set: no active transaction");
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (setting_id == NULL || setting_id[0] == '\0') {
+    if (s_tx.transaction_id != transaction_id) return ESP_ERR_INVALID_STATE;
+    if (setting_id == NULL || setting_id[0] == '\0' || value == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -281,6 +274,13 @@ esp_err_t device_settings_tx_set(const char *setting_id,
     return ESP_OK;
 }
 
+esp_err_t device_settings_tx_set(const char *setting_id,
+                                 device_setting_type_t type,
+                                 const void *value)
+{
+    return device_settings_tx_set_with_id(s_tx.transaction_id, setting_id, type, value);
+}
+
 esp_err_t device_settings_tx_commit(uint64_t transaction_id,
                                     uint32_t *new_revision)
 {
@@ -307,8 +307,9 @@ esp_err_t device_settings_tx_commit(uint64_t transaction_id,
         }
     }
 
-    /* Increment revision */
+    /* Increment revision without wrapping. */
     uint32_t current_revision = device_settings_get_revision();
+    if (current_revision == UINT32_MAX) return ESP_ERR_INVALID_STATE;
     uint32_t updated_revision = current_revision + 1;
 
     /* Update revision in staging blob */
@@ -334,9 +335,7 @@ esp_err_t device_settings_tx_commit(uint64_t transaction_id,
     s_tx.last_committed_tx_id = transaction_id;
     s_tx.last_committed_revision = updated_revision;
 
-    /* Start confirm timeout timer — if CONFIRM not received, auto-restart. */
-    confirm_timer_start();
-
+    /* Confirm timeout is armed by the command owner after ACK enqueue. */
     if (new_revision) *new_revision = updated_revision;
 
     ESP_LOGI(TAG, "commit: tx_id=0x%llX, new_revision=%lu",
@@ -349,6 +348,12 @@ esp_err_t device_settings_tx_abort(uint64_t transaction_id)
 {
     if (s_tx.state == DEVICE_SETTINGS_TX_IDLE) {
         return ESP_OK; /* Safe to abort when idle */
+    }
+    if (s_tx.state == DEVICE_SETTINGS_TX_COMMITTED_WAIT_CONFIRM ||
+        s_tx.state == DEVICE_SETTINGS_TX_RESTART_PENDING) {
+        if (s_tx.transaction_id == transaction_id ||
+            s_tx.last_committed_tx_id == transaction_id) return ESP_OK;
+        return ESP_ERR_INVALID_STATE;
     }
 
     if (s_tx.transaction_id != transaction_id) {
@@ -401,7 +406,13 @@ esp_err_t device_settings_tx_confirm_and_restart(void)
 
 void device_settings_tx_on_disconnect(void)
 {
-    if (s_tx.state == DEVICE_SETTINGS_TX_COMMITTED_WAIT_CONFIRM) {
+    if (s_tx.state == DEVICE_SETTINGS_TX_ACTIVE) {
+        void *active = (void *)device_settings_get_active_config();
+        void *staging = device_settings_get_staging_config();
+        size_t size = device_settings_get_config_size();
+        if (active != NULL && staging != NULL && size != 0) memcpy(staging, active, size);
+        tx_abort_internal();
+    } else if (s_tx.state == DEVICE_SETTINGS_TX_COMMITTED_WAIT_CONFIRM) {
         ESP_LOGW(TAG, "disconnect in COMMITTED_WAIT_CONFIRM — scheduling restart");
         confirm_timer_stop();
         s_tx.state = DEVICE_SETTINGS_TX_RESTART_PENDING;
